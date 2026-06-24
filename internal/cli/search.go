@@ -22,23 +22,25 @@ func newSearchCmd() *cobra.Command {
 		format string
 		role   string
 		mode   string
+		expand bool
 	)
 	cmd := &cobra.Command{
 		Use:   "search <query>",
 		Short: "Search memory (hybrid: messages + index tree, BM25/RRF)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSearch(cmd, args[0], top, format, role, mode)
+			return runSearch(cmd, args[0], top, format, role, mode, expand)
 		},
 	}
 	cmd.Flags().IntVar(&top, "top", 10, "number of results")
 	cmd.Flags().StringVar(&format, "format", output.FormatMarkdown, "llm | json | markdown")
 	cmd.Flags().StringVar(&role, "role", "", "message roles to include (default: conversation + reasoning; 'all' includes tool)")
 	cmd.Flags().StringVar(&mode, "mode", "hybrid", "hybrid | keyword | semantic")
+	cmd.Flags().BoolVar(&expand, "expand", true, "expand recall via relevance feedback (PRF); ignored in --mode keyword")
 	return cmd
 }
 
-func runSearch(cmd *cobra.Command, query string, top int, format, role, mode string) error {
+func runSearch(cmd *cobra.Command, query string, top int, format, role, mode string, expand bool) error {
 	store, err := openStore()
 	if err != nil {
 		return err
@@ -54,51 +56,12 @@ func runSearch(cmd *cobra.Command, query string, top int, format, role, mode str
 		return err
 	}
 
-	fts := ftsQuery(query)
-	fetch := top * 2
-	if fetch < 10 {
-		fetch = 10
-	}
-
-	// Canal de mensajes (BM25).
-	var channels []retrieve.Channel
-	msgHits, err := store.SearchMessages(fts, fetch, roles, allowed)
+	results, err := retrieve.Search(store, retrieve.Params{
+		Query: query, Top: top, Roles: roles, Allowed: allowed, Mode: mode, Expand: expand,
+	})
 	if err != nil {
 		return err
 	}
-	msgItems := make([]retrieve.Item, 0, len(msgHits))
-	for _, h := range msgHits {
-		msgItems = append(msgItems, retrieve.Item{
-			Kind: "message", ID: h.ID, ChatID: h.ChatID, Title: h.ChatTitle,
-			Source: h.ChatSource, Role: h.Role, Content: h.Content, Timestamp: h.Timestamp,
-		})
-	}
-	channels = append(channels, retrieve.Channel{Name: "messages", Items: msgItems})
-
-	// Canal del árbol de índice (BM25 sobre title+summary), salvo en keyword puro.
-	if mode != "keyword" {
-		nodeHits, err := store.SearchNodes(fts, fetch, allowed)
-		if err != nil {
-			return err
-		}
-		nodeItems := make([]retrieve.Item, 0, len(nodeHits))
-		for _, h := range nodeHits {
-			nodeItems = append(nodeItems, retrieve.Item{
-				Kind: "node", ID: h.ID, ChatID: h.ChatID, Title: h.Title,
-				NodeKind: h.Kind, Content: h.Summary, Timestamp: h.CreatedAt,
-			})
-		}
-		channels = append(channels, retrieve.Channel{Name: "nodes", Items: nodeItems})
-
-		// Canal de vectores (capa opcional de embeddings, si está configurada).
-		if vc, err := retrieve.VectorChannel(store, query, fetch, allowed); err != nil {
-			return err
-		} else if vc != nil {
-			channels = append(channels, *vc)
-		}
-	}
-
-	results := retrieve.Fuse(channels, top)
 
 	out := cmd.OutOrStdout()
 	if len(results) == 0 {
@@ -185,21 +148,6 @@ func resolveRoles(flag string) ([]string, error) {
 		}
 		return roles, nil
 	}
-}
-
-// ftsQuery convierte un query libre en una query FTS5 segura: cada token se cita
-// como literal y se combinan con AND implícito. Evita errores de sintaxis por
-// puntuación en la entrada del usuario.
-func ftsQuery(raw string) string {
-	fields := strings.Fields(raw)
-	quoted := make([]string, 0, len(fields))
-	for _, f := range fields {
-		f = strings.ReplaceAll(f, `"`, "")
-		if f != "" {
-			quoted = append(quoted, `"`+f+`"`)
-		}
-	}
-	return strings.Join(quoted, " ")
 }
 
 // snippet acorta el contenido a una sola línea para el listado.

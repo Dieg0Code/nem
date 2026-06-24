@@ -126,6 +126,7 @@ func (s *store) SearchMessages(query string, limit int, roles, chatIDs []string)
 	sql := fmt.Sprintf(`
 		SELECT m.id, m.chat_id, m.role, m.content, m.timestamp, m.token_count, m.seq,
 		       c.title AS chat_title, c.source AS chat_source,
+		       snippet(messages_fts, 1, '', '', '…', 18) AS snippet,
 		       bm25(messages_fts) AS score
 		FROM messages_fts
 		JOIN messages m ON m.id = messages_fts.message_id

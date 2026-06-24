@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,6 +24,8 @@ import (
 	"github.com/Dieg0Code/nem/internal/session"
 	"github.com/Dieg0Code/nem/internal/summarize"
 	"github.com/Dieg0Code/nem/internal/timing"
+	"github.com/Dieg0Code/nem/internal/when"
+	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -76,6 +79,10 @@ func newServer(store db.Store, version string) *mcp.Server {
 		Name:        "nem_duration",
 		Description: "How long a chat or project ACTUALLY took: active work time vs calendar span, sessions, last activity. Use it to calibrate effort estimates against real history instead of generic human-team timelines.",
 	}, h.duration)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "nem_fact",
+		Description: "Durable memory an agent always loads at session start (heads nem_outline), NOT retrieved probabilistically. Stable facts (who the user is, where they work, routine, preferences) AND dated reminders. action='add' with text to assert; pass due (YYYY-MM-DD, 'YYYY-MM-DD HH:MM', +3d, today, tomorrow) to make it a reminder. action='list' to read all; action='done' with id to complete a reminder. Optional supersedes=id replaces an old fact (kept as trail). Don't store conversation specifics here — that's what commits are for.",
+	}, h.fact)
 
 	return server
 }
@@ -147,6 +154,11 @@ func (h *handlers) outline(ctx context.Context, _ *mcp.CallToolRequest, in outli
 		return nil, none{}, err
 	}
 	var b strings.Builder
+	// Tier privilegiado: las afirmaciones durables (quién es, dónde trabaja, su
+	// rutina) encabezan el mapa SIEMPRE. Solo en la vista raíz y sin scope.
+	if in.NodeID == "" && !scoped {
+		h.writeFacts(&b)
+	}
 	if len(roots) == 0 {
 		b.WriteString("empty index — call nem_index first\n")
 	}
@@ -154,6 +166,39 @@ func (h *handlers) outline(ctx context.Context, _ *mcp.CallToolRequest, in outli
 		h.walk(&b, r, 0, depth, allowed, scoped)
 	}
 	return textResult(b.String()), none{}, nil
+}
+
+// writeFacts vuelca al tope del outline la memoria durable: hechos estables
+// (always-loaded) y, aparte, los recordatorios vigentes ordenados por fecha.
+func (h *handlers) writeFacts(b *strings.Builder) {
+	facts, err := h.store.ListFacts(false)
+	if err != nil || len(facts) == 0 {
+		return
+	}
+	var stable, reminders []db.Fact
+	for _, f := range facts {
+		if f.DueAt > 0 {
+			reminders = append(reminders, f)
+		} else {
+			stable = append(stable, f)
+		}
+	}
+	if len(stable) > 0 {
+		b.WriteString("## Facts (always-loaded)\n")
+		for _, f := range stable {
+			fmt.Fprintf(b, "- %s  (fact:%s)\n", f.Content, short(f.ID))
+		}
+		b.WriteString("\n")
+	}
+	if len(reminders) > 0 {
+		sort.Slice(reminders, func(i, j int) bool { return reminders[i].DueAt < reminders[j].DueAt })
+		nowUnix := time.Now().Unix()
+		b.WriteString("## Reminders\n")
+		for _, f := range reminders {
+			fmt.Fprintf(b, "- [%s] %s  (fact:%s)\n", when.Humanize(f.DueAt, nowUnix), f.Content, short(f.ID))
+		}
+		b.WriteString("\n")
+	}
 }
 
 func (h *handlers) walk(b *strings.Builder, n db.Node, level, depth int, allowed []string, scoped bool) {
@@ -184,53 +229,25 @@ func (h *handlers) walk(b *strings.Builder, n db.Node, level, depth int, allowed
 // --- search ---
 
 type searchIn struct {
-	Query string `json:"query" jsonschema:"the search query"`
-	Top   int    `json:"top,omitempty" jsonschema:"max results (default 10)"`
-	Mode  string `json:"mode,omitempty" jsonschema:"hybrid (default) or keyword"`
-	Role  string `json:"role,omitempty" jsonschema:"message roles to include; 'all' includes tool output"`
+	Query  string `json:"query" jsonschema:"the search query"`
+	Top    int    `json:"top,omitempty" jsonschema:"max results (default 10)"`
+	Mode   string `json:"mode,omitempty" jsonschema:"hybrid (default) or keyword"`
+	Role   string `json:"role,omitempty" jsonschema:"message roles to include; 'all' includes tool output"`
+	Expand *bool  `json:"expand,omitempty" jsonschema:"expand recall via relevance feedback (default true; ignored in keyword mode)"`
 }
 
 func (h *handlers) search(ctx context.Context, _ *mcp.CallToolRequest, in searchIn) (*mcp.CallToolResult, none, error) {
-	top := in.Top
-	if top <= 0 {
-		top = 10
-	}
 	allowed, _, err := h.allowed()
 	if err != nil {
 		return nil, none{}, err
 	}
-	roles := rolesFor(in.Role)
-	fts := ftsQuery(in.Query)
-	fetch := top * 2
-
-	var channels []retrieve.Channel
-	msgHits, err := h.store.SearchMessages(fts, fetch, roles, allowed)
+	expand := in.Expand == nil || *in.Expand // default true
+	results, err := retrieve.Search(h.store, retrieve.Params{
+		Query: in.Query, Top: in.Top, Roles: rolesFor(in.Role), Allowed: allowed, Mode: in.Mode, Expand: expand,
+	})
 	if err != nil {
 		return nil, none{}, err
 	}
-	items := make([]retrieve.Item, 0, len(msgHits))
-	for _, m := range msgHits {
-		items = append(items, retrieve.Item{Kind: "message", ID: m.ID, ChatID: m.ChatID, Title: m.ChatTitle, Source: m.ChatSource, Role: m.Role, Content: m.Content, Timestamp: m.Timestamp})
-	}
-	channels = append(channels, retrieve.Channel{Name: "messages", Items: items})
-	if in.Mode != "keyword" {
-		nodeHits, err := h.store.SearchNodes(fts, fetch, allowed)
-		if err != nil {
-			return nil, none{}, err
-		}
-		nitems := make([]retrieve.Item, 0, len(nodeHits))
-		for _, nh := range nodeHits {
-			nitems = append(nitems, retrieve.Item{Kind: "node", ID: nh.ID, ChatID: nh.ChatID, Title: nh.Title, NodeKind: nh.Kind, Content: nh.Summary, Timestamp: nh.CreatedAt})
-		}
-		channels = append(channels, retrieve.Channel{Name: "nodes", Items: nitems})
-
-		if vc, err := retrieve.VectorChannel(h.store, in.Query, fetch, allowed); err != nil {
-			return nil, none{}, err
-		} else if vc != nil {
-			channels = append(channels, *vc)
-		}
-	}
-	results := retrieve.Fuse(channels, top)
 
 	var b strings.Builder
 	if len(results) == 0 {
@@ -513,6 +530,101 @@ func (h *handlers) annotate(ctx context.Context, _ *mcp.CallToolRequest, in anno
 	return textResult(fmt.Sprintf("annotated %s (pinned; survives re-index)", in.NodeID)), none{}, nil
 }
 
+// --- fact (memoria semántica) ---
+
+type factIn struct {
+	Action     string `json:"action,omitempty" jsonschema:"add, list, or done (default list)"`
+	Text       string `json:"text,omitempty" jsonschema:"the fact to assert (required for add)"`
+	Supersedes string `json:"supersedes,omitempty" jsonschema:"id of a fact this one replaces (kept as trail)"`
+	Kind       string `json:"kind,omitempty" jsonschema:"fact kind: note (default) | reminder | schedule"`
+	Due        string `json:"due,omitempty" jsonschema:"reminder due date: YYYY-MM-DD, 'YYYY-MM-DD HH:MM', +3d, today, tomorrow (makes it a reminder)"`
+	ID         string `json:"id,omitempty" jsonschema:"fact id (required for action=done)"`
+}
+
+func (h *handlers) fact(ctx context.Context, _ *mcp.CallToolRequest, in factIn) (*mcp.CallToolResult, none, error) {
+	// Los facts son un tier GLOBAL (no filtrable por scope). Bajo un scope activo
+	// quedan inaccesibles —igual que nem_outline los oculta— para no saltarse el
+	// límite de lectura por esta vía.
+	if _, scoped, err := h.allowed(); err != nil {
+		return nil, none{}, err
+	} else if scoped {
+		return nil, none{}, fmt.Errorf("facts are global and not available under a scope (unset NEM_SCOPE)")
+	}
+	switch strings.TrimSpace(in.Action) {
+	case "add":
+		text := strings.TrimSpace(in.Text)
+		if text == "" {
+			return nil, none{}, fmt.Errorf("text is required to add a fact")
+		}
+		kind := strings.TrimSpace(in.Kind)
+		source := "agent"
+		if s := detectSource(); s != "" {
+			source = s
+		}
+		now := time.Now()
+		ts := now.Unix()
+		f := &db.Fact{ID: newFactID(), Content: text, Kind: kind, Source: source, CreatedAt: ts, UpdatedAt: ts}
+		if due := strings.TrimSpace(in.Due); due != "" {
+			dueAt, err := when.Parse(due, now)
+			if err != nil {
+				return nil, none{}, err
+			}
+			f.DueAt = dueAt
+			if f.Kind == "" {
+				f.Kind = "reminder"
+			}
+		}
+		if f.Kind == "" {
+			f.Kind = "note"
+		}
+		supersedes := ""
+		if in.Supersedes != "" {
+			// Aceptar el id corto que devuelve action='list' (resuelve prefijos).
+			old, err := h.resolveFactID(in.Supersedes)
+			if err != nil {
+				return nil, none{}, err
+			}
+			supersedes = old
+		}
+		if err := h.store.AddFact(f); err != nil {
+			return nil, none{}, err
+		}
+		if supersedes != "" {
+			if err := h.store.SupersedeFact(supersedes, f.ID, ts); err != nil {
+				return nil, none{}, err
+			}
+		}
+		return textResult(fmt.Sprintf("fact saved (%s)", short(f.ID))), none{}, nil
+	case "done":
+		id, err := h.resolveFactID(strings.TrimSpace(in.ID))
+		if err != nil {
+			return nil, none{}, err
+		}
+		if err := h.store.MarkFactDone(id, time.Now().Unix()); err != nil {
+			return nil, none{}, err
+		}
+		return textResult(fmt.Sprintf("marked done (%s)", short(id))), none{}, nil
+	default: // list
+		facts, err := h.store.ListFacts(false)
+		if err != nil {
+			return nil, none{}, err
+		}
+		if len(facts) == 0 {
+			return textResult("no facts yet"), none{}, nil
+		}
+		nowUnix := time.Now().Unix()
+		var b strings.Builder
+		for _, f := range facts {
+			due := ""
+			if f.DueAt > 0 {
+				due = " (due " + when.Humanize(f.DueAt, nowUnix) + ")"
+			}
+			fmt.Fprintf(&b, "- %s  [%s]%s (fact:%s)\n", f.Content, f.Kind, due, short(f.ID))
+		}
+		return textResult(b.String()), none{}, nil
+	}
+}
+
 // --- helpers ---
 
 func detectChatID() string {
@@ -525,6 +637,52 @@ func detectChatID() string {
 		return ""
 	}
 	return s.ChatID
+}
+
+// detectSource devuelve el agente de la sesión activa (claude|codex), o "".
+func detectSource() string {
+	d, err := session.NewDetector()
+	if err != nil {
+		return ""
+	}
+	s, err := d.Detect()
+	if err != nil || s == nil {
+		return ""
+	}
+	return s.Source
+}
+
+// newFactID genera un id para una afirmación.
+func newFactID() string { return uuid.NewString() }
+
+// resolveFactID acepta un id completo o un prefijo (como el id corto que muestra
+// la lista) y devuelve el id completo del fact único que matchea.
+func (h *handlers) resolveFactID(id string) (string, error) {
+	if strings.TrimSpace(id) == "" {
+		return "", fmt.Errorf("fact id is required")
+	}
+	if f, err := h.store.GetFact(id); err != nil {
+		return "", err
+	} else if f != nil {
+		return f.ID, nil
+	}
+	facts, err := h.store.ListFacts(true)
+	if err != nil {
+		return "", err
+	}
+	match := ""
+	for _, f := range facts {
+		if strings.HasPrefix(f.ID, id) {
+			if match != "" {
+				return "", fmt.Errorf("ambiguous fact id %q", id)
+			}
+			match = f.ID
+		}
+	}
+	if match == "" {
+		return "", fmt.Errorf("fact %q not found", id)
+	}
+	return match, nil
 }
 
 func rolesFor(flag string) []string {
@@ -543,17 +701,6 @@ func rolesFor(flag string) []string {
 		}
 		return roles
 	}
-}
-
-func ftsQuery(raw string) string {
-	var quoted []string
-	for _, f := range strings.Fields(raw) {
-		f = strings.ReplaceAll(f, `"`, "")
-		if f != "" {
-			quoted = append(quoted, `"`+f+`"`)
-		}
-	}
-	return strings.Join(quoted, " ")
 }
 
 func oneLine(s string, max int) string {

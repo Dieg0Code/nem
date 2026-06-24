@@ -60,6 +60,34 @@ type Memory struct {
 	UpdatedAt  int64
 }
 
+// Fact es la capa de memoria SEMÁNTICA de nem: una afirmación durable que el
+// agente (o el humano) escribe directamente, NO derivada de una conversación.
+// Vive en un tier privilegiado: se carga SIEMPRE al arrancar (encabeza `nem
+// outline`), no se recupera por probabilidad como los nodos/mensajes — por eso
+// "quién soy / dónde trabajo / mi rutina" nunca queda enterrado entre 97k
+// mensajes. Es append-only en espíritu: una afirmación no se pisa, se REEMPLAZA
+// (Superseded/SupersededBy) dejando rastro, igual que un commit.
+//
+// Kind tipifica la afirmación: "note" (hecho estable, siempre vigente),
+// "reminder" (con fecha, vence y se completa) o "schedule" (rutina, texto
+// estable). El mismo primitivo cubre memoria semántica y prospectiva: un
+// reminder es un Fact con DueAt en el futuro.
+type Fact struct {
+	ID           string `gorm:"primaryKey"`
+	Content      string // la afirmación, escrita por el agente/humano
+	Kind         string `gorm:"index"` // note (default) | reminder | schedule
+	Source       string // quién la afirmó: claude | codex | human
+	CreatedAt    int64
+	UpdatedAt    int64
+	Superseded   bool   `gorm:"index"` // reemplazada por una afirmación posterior
+	SupersededBy string // id del Fact que la reemplaza
+
+	// Capa prospectiva (recordatorios). DueAt=0 → hecho estable sin fecha.
+	DueAt  int64 `gorm:"index"` // cuándo es relevante/vence (unix secs)
+	Done   bool  `gorm:"index"` // recordatorio completado (deja de aparecer)
+	DoneAt int64 // cuándo se marcó completado
+}
+
 // Node es un nodo del árbol de índice (estilo PageIndex) que el agente navega:
 // root → project → chat → commit (→ segment). El Summary es lo que el agente lee
 // para decidir en qué rama bajar; el rango [MsgFromSeq, MsgToSeq] permite el
@@ -107,6 +135,7 @@ func models() []any {
 		&Commit{},
 		&Staging{},
 		&Memory{},
+		&Fact{},
 		&Node{},
 		&Embedding{},
 	}

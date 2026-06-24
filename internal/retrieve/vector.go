@@ -30,13 +30,26 @@ func VectorChannel(store db.Store, query string, top int, allowed []string) (*Ch
 		return nil, nil
 	}
 
+	// Solo comparamos vectores de la MISMA dimensión que la query: si se cambió
+	// el modelo de embeddings (p.ej. a uno mejor con otra dimensión) sin
+	// re-indexar, los vectores viejos son incomparables. Hay que descartarlos,
+	// no solo porque su cosine sería 0, sino porque el RRF rankea por POSICIÓN:
+	// un vector obsoleto igual recibiría crédito. Recordar: `nem index --force`
+	// tras cambiar de modelo.
+	qdim := len(qv[0])
 	type scored struct {
 		id    string
 		score float64
 	}
 	ranked := make([]scored, 0, len(embs))
 	for _, e := range embs {
+		if e.Dim != qdim {
+			continue
+		}
 		ranked = append(ranked, scored{e.NodeID, embed.Cosine(qv[0], embed.Decode(e.Vec))})
+	}
+	if len(ranked) == 0 {
+		return nil, nil // todos los vectores son de otro modelo: sin señal usable
 	}
 	sort.Slice(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
 

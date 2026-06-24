@@ -2,11 +2,13 @@ package cli
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/Dieg0Code/nem/internal/db"
 	"github.com/Dieg0Code/nem/internal/timing"
+	"github.com/Dieg0Code/nem/internal/when"
 	"github.com/spf13/cobra"
 )
 
@@ -49,6 +51,14 @@ func runOutline(cmd *cobra.Command, _ string, start string, depth int) error {
 	}
 
 	out := cmd.OutOrStdout()
+
+	// Tier privilegiado: las afirmaciones durables (quién es, dónde trabaja, su
+	// rutina) encabezan el mapa SIEMPRE, sin pasar por la recuperación
+	// probabilística. Solo en la vista raíz y sin scope (los facts son globales).
+	if start == "" && !scoped {
+		printFacts(cmd, store)
+	}
+
 	var roots []db.Node
 	if start == "" {
 		roots, err = store.RootNodes()
@@ -74,6 +84,48 @@ func runOutline(cmd *cobra.Command, _ string, start string, depth int) error {
 		printNode(cmd, store, r, 0, depth, allowed, scoped)
 	}
 	return nil
+}
+
+// printFacts imprime al tope del outline la memoria durable: los hechos estables
+// (always-loaded) y, aparte, los recordatorios vigentes ordenados por fecha.
+// Silencioso si no hay nada, para no ensuciar la vista.
+func printFacts(cmd *cobra.Command, store db.Store) {
+	facts, err := store.ListFacts(false)
+	if err != nil || len(facts) == 0 {
+		return
+	}
+	out := cmd.OutOrStdout()
+	stable, reminders := splitFacts(facts)
+
+	if len(stable) > 0 {
+		fmt.Fprintln(out, "## Facts (always-loaded)")
+		for _, f := range stable {
+			fmt.Fprintf(out, "- %s  (fact:%s)\n", f.Content, shortHash(f.ID))
+		}
+		fmt.Fprintln(out)
+	}
+	if len(reminders) > 0 {
+		nowUnix := time.Now().Unix()
+		fmt.Fprintln(out, "## Reminders")
+		for _, f := range reminders {
+			fmt.Fprintf(out, "- [%s] %s  (fact:%s)\n", when.Humanize(f.DueAt, nowUnix), f.Content, shortHash(f.ID))
+		}
+		fmt.Fprintln(out)
+	}
+}
+
+// splitFacts separa los hechos estables de los recordatorios con fecha, y
+// ordena los recordatorios por vencimiento (más próximo/atrasado primero).
+func splitFacts(facts []db.Fact) (stable, reminders []db.Fact) {
+	for _, f := range facts {
+		if f.DueAt > 0 {
+			reminders = append(reminders, f)
+		} else {
+			stable = append(stable, f)
+		}
+	}
+	sort.Slice(reminders, func(i, j int) bool { return reminders[i].DueAt < reminders[j].DueAt })
+	return stable, reminders
 }
 
 // printNode imprime un nodo y recurre por sus hijos hasta `depth`.

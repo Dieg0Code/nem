@@ -96,6 +96,21 @@ type Store interface {
 	// vacío/nil = todos.
 	CommitNodes(chatIDs []string) ([]Node, error)
 
+	// --- facts (memoria semántica: tier privilegiado, siempre cargado) ---
+	// AddFact persiste una afirmación durable (el llamador fija id/timestamps).
+	AddFact(f *Fact) error
+	// ListFacts devuelve las afirmaciones (newest first). includeInactive=false
+	// devuelve solo las vigentes (ni superseded ni done).
+	ListFacts(includeInactive bool) ([]Fact, error)
+	// GetFact devuelve una afirmación por id (nil, nil si no existe).
+	GetFact(id string) (*Fact, error)
+	// SupersedeFact marca oldID como reemplazada por newID (append-only).
+	SupersedeFact(oldID, newID string, updatedAt int64) error
+	// MarkFactDone marca un recordatorio como completado.
+	MarkFactDone(id string, doneAt int64) error
+	// DeleteFact borra una afirmación de raíz (corrección de errores).
+	DeleteFact(id string) error
+
 	// --- embeddings (capa opcional) ---
 	// ClearEmbeddings borra todos los vectores.
 	ClearEmbeddings() error
@@ -112,11 +127,14 @@ type NodeHit struct {
 }
 
 // SearchHit es un resultado de búsqueda: el mensaje más metadata del chat y el
-// score BM25 (menor = más relevante).
+// score BM25 (menor = más relevante). Snippet es la ventana de texto alrededor
+// del match (FTS5 snippet()), para que el agente vea POR QUÉ matcheó sin tener
+// que abrir el mensaje completo.
 type SearchHit struct {
 	Message
 	ChatTitle  string
 	ChatSource string
+	Snippet    string
 	Score      float64
 }
 

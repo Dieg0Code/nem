@@ -29,12 +29,18 @@ The loop is: **`outline` (see the map) → reason → `read`/`search`/`timeline`
 
 - `nem status` — detected chat, staged messages, latest commit.
 - `nem outline [--depth N]` — **start here.** The tree of project → chat → commit,
-  each with a summary. Scan it, pick the branch that matches, then drill in.
+  each with a summary. Scan it, pick the branch that matches, then drill in. If
+  there are durable **facts** (see below), they head the outline under
+  `## Facts (always-loaded)` — read them first; that's who the user is.
 - `nem search "<terms>" --mode hybrid --format llm` — retrieval that fuses BM25
   (messages + tree nodes) with **semantic embeddings** (when configured) and a
   recency boost, so it finds things by meaning even when your words don't match.
-  `--mode keyword` = BM25 only (exact terms); `--mode semantic` = vectors only;
-  `--mode hybrid` (default) = both. `--role all` also includes tools.
+  It already matches **morphological variants** (Spanish/English stemming, so
+  `programar` finds `programación`) and **expands by co-occurrence** (relevance
+  feedback) in-process — so prefer a natural query and trust the first results.
+  `--mode keyword` = exact terms only (no expansion); `--mode semantic` = vectors
+  only; `--mode hybrid` (default) = everything. `--expand=false` turns off the
+  relevance-feedback expansion. `--role all` also includes tools.
 - `nem timeline <project|chatID>` — chronological evolution of a project/chat
   (how a decision changed over time; newest entries are current).
 - `nem read <HEAD|hash|chat:id|commit:hash> --format llm` — the frozen snapshot of
@@ -57,6 +63,32 @@ The loop is: **`outline` (see the map) → reason → `read`/`search`/`timeline`
 > survives `nem index` and flows up into the project summary. This is the mutable
 > layer over the immutable commits: the commit content never changes, but you curate
 > how it's described and found.
+
+### Durable facts — semantic memory (always loaded)
+
+Commits are *episodic* memory: what happened in a conversation, retrieved by
+relevance. **Facts** are *semantic* memory: durable truths the user states about
+themselves — who they are, where they work, their routine, stable preferences.
+They live in a privileged tier that loads at the **top of every `outline`**, so
+they're never buried and never guessed by keyword search.
+
+- `nem fact list` (MCP: `nem_fact` action=`list`) — read the durable facts.
+- `nem fact add "<the fact>"` (MCP: `nem_fact` action=`add`, `text`) — assert one.
+  Write a fact when the user tells you something durable about themselves or how
+  they work — not conversation specifics (those are commits).
+- **Reminders** (prospective memory) are facts with a date:
+  `nem fact add "entregar notas" --due 2026-06-27` (MCP: `nem_fact` action=`add`,
+  `due`). `due` accepts `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, `+3d`/`+2w`/`+6h`,
+  `today`, `tomorrow`. They surface under `## Reminders` at the top of `outline`,
+  sorted by date with a relative label (`in 3d`, `overdue 2d`). When one is
+  handled, `nem fact done <id>` (MCP: `nem_fact` action=`done`, `id`) stops it
+  surfacing (kept as trail).
+- The layer is append-only: to update a fact that *changed*, don't delete it —
+  `nem fact add "<new>" --supersedes <id>` keeps the old one as a trail.
+  `nem fact rm <id>` is only for fixing a mistaken entry.
+- Facts are **global** (not scope-filterable), so under an active `--scope`/
+  `NEM_SCOPE` they're hidden and the `fact` commands refuse — unset the scope to
+  reach them.
 
 ### Calibrate estimates against real history
 

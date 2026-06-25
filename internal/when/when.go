@@ -11,6 +11,13 @@ import (
 	"time"
 )
 
+// FormatNow describe el instante t en lenguaje legible para situar al agente en
+// el tiempo: día de la semana, fecha, hora y offset de zona. nem rastrea tiempo
+// (recencia, reminders) pero el agente no sabe la hora actual hasta leer esto.
+func FormatNow(t time.Time) string {
+	return t.Format("Monday 2006-01-02 15:04 (-07:00)")
+}
+
 // Parse convierte una expresión de fecha en un unix timestamp (segundos),
 // relativo a now y en la zona local de now. Formatos:
 //

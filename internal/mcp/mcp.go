@@ -154,6 +154,10 @@ func (h *handlers) outline(ctx context.Context, _ *mcp.CallToolRequest, in outli
 		return nil, none{}, err
 	}
 	var b strings.Builder
+	// El reloj: sitúa al agente en el tiempo (no filtra por scope, es la hora).
+	if in.NodeID == "" {
+		fmt.Fprintf(&b, "## Now\n%s\n\n", when.FormatNow(time.Now()))
+	}
 	// Tier privilegiado: las afirmaciones durables (quién es, dónde trabaja, su
 	// rutina) encabezan el mapa SIEMPRE. Solo en la vista raíz y sin scope.
 	if in.NodeID == "" && !scoped {

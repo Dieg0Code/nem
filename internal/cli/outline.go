@@ -9,6 +9,7 @@ import (
 	"github.com/Dieg0Code/nem/internal/db"
 	"github.com/Dieg0Code/nem/internal/facts"
 	"github.com/Dieg0Code/nem/internal/timing"
+	"github.com/Dieg0Code/nem/internal/when"
 	"github.com/spf13/cobra"
 )
 
@@ -51,6 +52,13 @@ func runOutline(cmd *cobra.Command, _ string, start string, depth int) error {
 	}
 
 	out := cmd.OutOrStdout()
+
+	// El reloj: sitúa al agente en el tiempo. nem rastrea recencia y reminders,
+	// pero el agente no sabe la hora actual hasta leerla acá. Solo en la raíz; no
+	// filtra por scope (es la hora, no datos).
+	if start == "" {
+		fmt.Fprintf(out, "## Now\n%s\n\n", when.FormatNow(time.Now()))
+	}
 
 	// Tier privilegiado: las afirmaciones durables (quién es, dónde trabaja, su
 	// rutina) encabezan el mapa SIEMPRE, sin pasar por la recuperación

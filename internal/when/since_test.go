@@ -30,6 +30,16 @@ func TestYearsSince(t *testing.T) {
 	}
 }
 
+func TestFormatNow(t *testing.T) {
+	loc := time.FixedZone("CLT", -4*3600) // Chile continental
+	tt := time.Date(2026, time.June, 25, 15, 29, 0, 0, loc)
+	got := FormatNow(tt)
+	want := "Thursday 2026-06-25 15:29 (-04:00)"
+	if got != want {
+		t.Errorf("FormatNow = %q, want %q", got, want)
+	}
+}
+
 func TestHumanizeSince(t *testing.T) {
 	now := at(2026, time.June, 25)
 	tests := []struct {

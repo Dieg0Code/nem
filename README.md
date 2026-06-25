@@ -39,6 +39,19 @@ stop being separate assistants with separate amnesia and start behaving like one
 mind with one memory. Single binary, SQLite embedded in pure Go (no cgo),
 offline.
 
+## The part nobody mentions
+
+**Did you know your agent's entire history is already sitting on your disk?**
+
+Claude Code and Codex write **every session to your local disk** — plain files,
+on your machine, right now. That's the raw material: the reasoning, the
+dead-ends, the decisions you arrived at together. But it's inert. The agent can't
+recall it next time and you can't search it; it just piles up and goes stale.
+
+**nem reads those local logs** (`nem ingest`) and turns them into versioned,
+navigable memory — recallable by you *and* by the agent. Nothing new to collect,
+nothing leaves your machine. It was already yours; nem just makes it usable.
+
 ## Install
 
 ```powershell

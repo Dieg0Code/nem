@@ -49,14 +49,14 @@ changelog:
       - "^chore:"
       - "Merge pull request"
 
-# Windows: scoop install nem (tras: scoop bucket add nem https://github.com/Dieg0Code/scoop-bucket)
+# Windows: scoop install nem (tras: scoop bucket add Dieg0Code https://github.com/Dieg0Code/scoop-bucket)
 scoops:
   - repository:
       owner: Dieg0Code
       name: scoop-bucket
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/Dieg0Code/nem
-    description: Version your agent's context like git versions code.
+    description: Git-style versioned memory for AI coding agents (Claude Code & Codex).
     license: MIT
 
 # macOS/Linux: brew install Dieg0Code/homebrew-tap/nem
@@ -66,7 +66,7 @@ homebrew_casks:
       name: homebrew-tap
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/Dieg0Code/nem
-    description: Version your agent's context like git versions code.
+    description: Git-style versioned memory for AI coding agents (Claude Code & Codex).
     # Quita la cuarentena de macOS para que el binario sin firmar pueda correr.
     hooks:
       post:

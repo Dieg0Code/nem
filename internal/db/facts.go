@@ -76,6 +76,36 @@ func (s *store) SupersedeFact(oldID, newID string, updatedAt int64) error {
 	return nil
 }
 
+// RecordFactHit suma 1 al contador de uso de cada fact y actualiza LastHit. Es
+// la señal "aprendida" del peso: un fact que matchea un search o se resuelve por
+// id sube. Best-effort: no devuelve error de "no encontrado" (los ids vienen de
+// una pasada previa); un fallo de DB sí se propaga.
+func (s *store) RecordFactHit(ids []string, now int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	err := s.gdb.Model(&Fact{}).Where("id IN ?", ids).
+		Updates(map[string]any{"hits": gorm.Expr("COALESCE(hits, 0) + 1"), "last_hit": now}).Error
+	if err != nil {
+		return fmt.Errorf("failed to record fact hit: %w", err)
+	}
+	return nil
+}
+
+// SetFactPinned fija/quita el pin manual de un fact (mitad explícita del peso
+// híbrido): un fact pinned nunca se colapsa por presupuesto. Error si no existe.
+func (s *store) SetFactPinned(id string, pinned bool, updatedAt int64) error {
+	res := s.gdb.Model(&Fact{}).Where("id = ?", id).
+		Updates(map[string]any{"pinned": pinned, "updated_at": updatedAt})
+	if res.Error != nil {
+		return fmt.Errorf("failed to set pinned on fact %s: %w", id, res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return fmt.Errorf("fact %s not found", id)
+	}
+	return nil
+}
+
 // DeleteFact borra una afirmación de raíz (para corregir un error de tipeo, no
 // un cambio de los hechos: para eso usar supersede). Error si no existe.
 func (s *store) DeleteFact(id string) error {

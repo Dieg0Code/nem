@@ -86,6 +86,18 @@ type Fact struct {
 	DueAt  int64 `gorm:"index"` // cuándo es relevante/vence (unix secs)
 	Done   bool  `gorm:"index"` // recordatorio completado (deja de aparecer)
 	DoneAt int64 // cuándo se marcó completado
+
+	// Capas (peso) y derivación. Aditivos; filas viejas quedan NULL → tratados
+	// como defaults vía COALESCE. El "peso" NO se guarda: se computa en lectura
+	// desde estos campos (ver internal/facts).
+	Stability string `gorm:"index"` // core | stable (default) | volatile — inferido al add
+	Pinned    bool   `gorm:"index"` // override manual: nunca se colapsa por presupuesto
+	Hits      int64  // veces que el fact fue útil (matcheó un search / fue resuelto)
+	LastHit   int64  // unix del último hit (para decaimiento de recencia)
+	// Derivación: HasAnchor marca que AnchorAt es válido (presencia explícita, no
+	// un sentinel: AnchorAt=0 es 1970-01-01 y los anteriores son negativos).
+	HasAnchor bool
+	AnchorAt  int64 // fecha invariante para facts derivados (p.ej. nacimiento)
 }
 
 // Node es un nodo del árbol de índice (estilo PageIndex) que el agente navega:

@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/Dieg0Code/nem/internal/db"
+	"github.com/Dieg0Code/nem/internal/facts"
 	"github.com/Dieg0Code/nem/internal/output"
 	"github.com/Dieg0Code/nem/internal/retrieve"
 	"github.com/spf13/cobra"
@@ -51,7 +54,7 @@ func runSearch(cmd *cobra.Command, query string, top int, format, role, mode str
 	if err != nil {
 		return err
 	}
-	allowed, _, err := resolveScope(cmd, store)
+	allowed, scoped, err := resolveScope(cmd, store)
 	if err != nil {
 		return err
 	}
@@ -61,6 +64,12 @@ func runSearch(cmd *cobra.Command, query string, top int, format, role, mode str
 	})
 	if err != nil {
 		return err
+	}
+
+	// Señal "aprendida" del peso de los facts: si la query matchea facts, súbeles
+	// el uso (best-effort; conjunto chico, sin tocar FTS). Global → solo sin scope.
+	if !scoped {
+		recordFactHits(store, query)
 	}
 
 	out := cmd.OutOrStdout()
@@ -115,6 +124,18 @@ func renderSearchJSON(cmd *cobra.Command, query string, results []retrieve.Score
 	}
 	fmt.Fprintln(cmd.OutOrStdout(), string(b))
 	return nil
+}
+
+// recordFactHits sube el contador de uso de los facts que matchean la query (la
+// mitad "aprendida" del peso). Best-effort: un fallo nunca debe romper el search.
+func recordFactHits(store db.Store, query string) {
+	all, err := store.ListFacts(false)
+	if err != nil {
+		return
+	}
+	if m := facts.MatchQuery(all, query); len(m) > 0 {
+		_ = store.RecordFactHit(facts.IDs(m), time.Now().Unix())
+	}
 }
 
 // validRoles son los roles que nem persiste. "all" es un atajo especial.

@@ -108,6 +108,10 @@ type Store interface {
 	SupersedeFact(oldID, newID string, updatedAt int64) error
 	// MarkFactDone marca un recordatorio como completado.
 	MarkFactDone(id string, doneAt int64) error
+	// RecordFactHit suma uso (señal aprendida del peso) a los facts dados.
+	RecordFactHit(ids []string, now int64) error
+	// SetFactPinned fija/quita el pin manual de un fact.
+	SetFactPinned(id string, pinned bool, updatedAt int64) error
 	// DeleteFact borra una afirmación de raíz (corrección de errores).
 	DeleteFact(id string) error
 

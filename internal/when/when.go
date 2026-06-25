@@ -86,6 +86,43 @@ func Humanize(due, now int64) string {
 	}
 }
 
+// YearsSince devuelve los años completos transcurridos entre anchor y now (p.ej.
+// la edad a partir de la fecha de nacimiento). No cuenta el año en curso hasta
+// que pasa el día del aniversario. Negativo si anchor está en el futuro.
+func YearsSince(anchor, now int64) int {
+	a := time.Unix(anchor, 0)
+	n := time.Unix(now, 0)
+	years := n.Year() - a.Year()
+	// Aún no llegó el aniversario este año → restar uno.
+	if n.Month() < a.Month() || (n.Month() == a.Month() && n.Day() < a.Day()) {
+		years--
+	}
+	return years
+}
+
+// HumanizeSince describe el tiempo transcurrido desde anchor en lenguaje natural
+// y compacto: "hoy", "hace 3 días", "hace 5 meses", "hace 2 años". Espejo de
+// Humanize pero mirando al pasado y con granularidad creciente.
+func HumanizeSince(anchor, now int64) string {
+	days := dayDiff(now, anchor)
+	switch {
+	case days <= 0:
+		return "hoy"
+	case days == 1:
+		return "ayer"
+	case days < 30:
+		return fmt.Sprintf("hace %dd", days)
+	case days < 365:
+		return fmt.Sprintf("hace %d meses", days/30)
+	default:
+		y := YearsSince(anchor, now)
+		if y <= 1 {
+			return "hace 1 año"
+		}
+		return fmt.Sprintf("hace %d años", y)
+	}
+}
+
 // dayDiff devuelve la diferencia en días calendario (local) entre due y now,
 // truncando ambos a medianoche para que "hoy a cualquier hora" sea 0.
 func dayDiff(due, now int64) int {

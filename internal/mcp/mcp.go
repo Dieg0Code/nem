@@ -10,13 +10,13 @@ import (
 	"fmt"
 	"os"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/Dieg0Code/nem/internal/config"
 	"github.com/Dieg0Code/nem/internal/db"
 	"github.com/Dieg0Code/nem/internal/embed"
+	"github.com/Dieg0Code/nem/internal/facts"
 	"github.com/Dieg0Code/nem/internal/index"
 	"github.com/Dieg0Code/nem/internal/output"
 	"github.com/Dieg0Code/nem/internal/retrieve"
@@ -81,7 +81,7 @@ func newServer(store db.Store, version string) *mcp.Server {
 	}, h.duration)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "nem_fact",
-		Description: "Durable memory an agent always loads at session start (heads nem_outline), NOT retrieved probabilistically. Stable facts (who the user is, where they work, routine, preferences) AND dated reminders. action='add' with text to assert; pass due (YYYY-MM-DD, 'YYYY-MM-DD HH:MM', +3d, today, tomorrow) to make it a reminder. action='list' to read all; action='done' with id to complete a reminder. Optional supersedes=id replaces an old fact (kept as trail). Don't store conversation specifics here — that's what commits are for.",
+		Description: "Durable memory an agent always loads at session start (heads nem_outline), NOT retrieved probabilistically. Stable facts (who the user is, where they work, routine, preferences) AND dated reminders. action='add' with text to assert; pass due (YYYY-MM-DD, 'YYYY-MM-DD HH:MM', +3d, today, tomorrow) to make it a reminder. The layer (core/stable/volatile) is inferred automatically; for facts that change (e.g. age) store the invariant via anchor=YYYY-MM-DD and put {age} or {elapsed} in the text — it renders fresh on read. pin=true keeps a fact always shown. action='list' to read; 'done' with id completes a reminder; 'pin'/'unpin' with id toggles the pin. Optional supersedes=id replaces an old fact (kept as trail). Don't store conversation specifics here — that's what commits are for.",
 	}, h.fact)
 
 	return server
@@ -169,33 +169,29 @@ func (h *handlers) outline(ctx context.Context, _ *mcp.CallToolRequest, in outli
 }
 
 // writeFacts vuelca al tope del outline la memoria durable: hechos estables
-// (always-loaded) y, aparte, los recordatorios vigentes ordenados por fecha.
+// (always-loaded, por peso y acotados por presupuesto) y, aparte, los
+// recordatorios vigentes por fecha. Comparte la lógica con la CLI vía
+// internal/facts para no duplicarla.
 func (h *handlers) writeFacts(b *strings.Builder) {
-	facts, err := h.store.ListFacts(false)
-	if err != nil || len(facts) == 0 {
+	all, err := h.store.ListFacts(false)
+	if err != nil || len(all) == 0 {
 		return
 	}
-	var stable, reminders []db.Fact
-	for _, f := range facts {
-		if f.DueAt > 0 {
-			reminders = append(reminders, f)
-		} else {
-			stable = append(stable, f)
-		}
-	}
-	if len(stable) > 0 {
+	res := facts.Present(all, time.Now().Unix(), config.FactsBudget())
+	if len(res.Stable) > 0 {
 		b.WriteString("## Facts (always-loaded)\n")
-		for _, f := range stable {
-			fmt.Fprintf(b, "- %s  (fact:%s)\n", f.Content, short(f.ID))
+		for _, l := range res.Stable {
+			fmt.Fprintf(b, "- %s  (fact:%s)\n", l.Content, short(l.ID))
+		}
+		if res.Collapsed > 0 {
+			fmt.Fprintf(b, "- … +%d more facts (nem_fact action=list)\n", res.Collapsed)
 		}
 		b.WriteString("\n")
 	}
-	if len(reminders) > 0 {
-		sort.Slice(reminders, func(i, j int) bool { return reminders[i].DueAt < reminders[j].DueAt })
-		nowUnix := time.Now().Unix()
+	if len(res.Reminders) > 0 {
 		b.WriteString("## Reminders\n")
-		for _, f := range reminders {
-			fmt.Fprintf(b, "- [%s] %s  (fact:%s)\n", when.Humanize(f.DueAt, nowUnix), f.Content, short(f.ID))
+		for _, l := range res.Reminders {
+			fmt.Fprintf(b, "- [%s] %s  (fact:%s)\n", l.Due, l.Content, short(l.ID))
 		}
 		b.WriteString("\n")
 	}
@@ -237,7 +233,7 @@ type searchIn struct {
 }
 
 func (h *handlers) search(ctx context.Context, _ *mcp.CallToolRequest, in searchIn) (*mcp.CallToolResult, none, error) {
-	allowed, _, err := h.allowed()
+	allowed, scoped, err := h.allowed()
 	if err != nil {
 		return nil, none{}, err
 	}
@@ -247,6 +243,15 @@ func (h *handlers) search(ctx context.Context, _ *mcp.CallToolRequest, in search
 	})
 	if err != nil {
 		return nil, none{}, err
+	}
+
+	// Señal "aprendida" del peso de los facts (best-effort; global → solo sin scope).
+	if !scoped {
+		if all, ferr := h.store.ListFacts(false); ferr == nil {
+			if m := facts.MatchQuery(all, in.Query); len(m) > 0 {
+				_ = h.store.RecordFactHit(facts.IDs(m), time.Now().Unix())
+			}
+		}
 	}
 
 	var b strings.Builder
@@ -533,12 +538,15 @@ func (h *handlers) annotate(ctx context.Context, _ *mcp.CallToolRequest, in anno
 // --- fact (memoria semántica) ---
 
 type factIn struct {
-	Action     string `json:"action,omitempty" jsonschema:"add, list, or done (default list)"`
+	Action     string `json:"action,omitempty" jsonschema:"add, list, done, pin, or unpin (default list)"`
 	Text       string `json:"text,omitempty" jsonschema:"the fact to assert (required for add)"`
 	Supersedes string `json:"supersedes,omitempty" jsonschema:"id of a fact this one replaces (kept as trail)"`
 	Kind       string `json:"kind,omitempty" jsonschema:"fact kind: note (default) | reminder | schedule"`
 	Due        string `json:"due,omitempty" jsonschema:"reminder due date: YYYY-MM-DD, 'YYYY-MM-DD HH:MM', +3d, today, tomorrow (makes it a reminder)"`
-	ID         string `json:"id,omitempty" jsonschema:"fact id (required for action=done)"`
+	Anchor     string `json:"anchor,omitempty" jsonschema:"invariant date for a derived fact; put {age}/{elapsed} in text (e.g. 1995-07-20)"`
+	Stability  string `json:"stability,omitempty" jsonschema:"override the inferred layer: core | stable | volatile"`
+	Pin        bool   `json:"pin,omitempty" jsonschema:"on add, pin the fact (always shown, never collapsed by the budget)"`
+	ID         string `json:"id,omitempty" jsonschema:"fact id (required for action=done/pin/unpin)"`
 }
 
 func (h *handlers) fact(ctx context.Context, _ *mcp.CallToolRequest, in factIn) (*mcp.CallToolResult, none, error) {
@@ -563,7 +571,7 @@ func (h *handlers) fact(ctx context.Context, _ *mcp.CallToolRequest, in factIn) 
 		}
 		now := time.Now()
 		ts := now.Unix()
-		f := &db.Fact{ID: newFactID(), Content: text, Kind: kind, Source: source, CreatedAt: ts, UpdatedAt: ts}
+		f := &db.Fact{ID: newFactID(), Content: text, Kind: kind, Source: source, CreatedAt: ts, UpdatedAt: ts, Pinned: in.Pin}
 		if due := strings.TrimSpace(in.Due); due != "" {
 			dueAt, err := when.Parse(due, now)
 			if err != nil {
@@ -576,6 +584,24 @@ func (h *handlers) fact(ctx context.Context, _ *mcp.CallToolRequest, in factIn) 
 		}
 		if f.Kind == "" {
 			f.Kind = "note"
+		}
+		if anchor := strings.TrimSpace(in.Anchor); anchor != "" {
+			anchorAt, err := when.Parse(anchor, now)
+			if err != nil {
+				return nil, none{}, fmt.Errorf("bad anchor: %w", err)
+			}
+			f.AnchorAt = anchorAt
+			f.HasAnchor = true
+		}
+		if s := strings.TrimSpace(in.Stability); s != "" {
+			switch s {
+			case facts.Core, facts.Stable, facts.Volatile:
+				f.Stability = s
+			default:
+				return nil, none{}, fmt.Errorf("bad stability %q (use core | stable | volatile)", s)
+			}
+		} else {
+			f.Stability = facts.ClassifyStability(text, f.DueAt, f.HasAnchor)
 		}
 		supersedes := ""
 		if in.Supersedes != "" {
@@ -604,22 +630,39 @@ func (h *handlers) fact(ctx context.Context, _ *mcp.CallToolRequest, in factIn) 
 			return nil, none{}, err
 		}
 		return textResult(fmt.Sprintf("marked done (%s)", short(id))), none{}, nil
-	default: // list
-		facts, err := h.store.ListFacts(false)
+	case "pin", "unpin":
+		id, err := h.resolveFactID(strings.TrimSpace(in.ID))
 		if err != nil {
 			return nil, none{}, err
 		}
-		if len(facts) == 0 {
+		pin := strings.TrimSpace(in.Action) == "pin"
+		if err := h.store.SetFactPinned(id, pin, time.Now().Unix()); err != nil {
+			return nil, none{}, err
+		}
+		return textResult(fmt.Sprintf("%sned (%s)", in.Action, short(id))), none{}, nil
+	default: // list
+		list, err := h.store.ListFacts(false)
+		if err != nil {
+			return nil, none{}, err
+		}
+		if len(list) == 0 {
 			return textResult("no facts yet"), none{}, nil
 		}
 		nowUnix := time.Now().Unix()
 		var b strings.Builder
-		for _, f := range facts {
+		for _, f := range list {
 			due := ""
 			if f.DueAt > 0 {
 				due = " (due " + when.Humanize(f.DueAt, nowUnix) + ")"
 			}
-			fmt.Fprintf(&b, "- %s  [%s]%s (fact:%s)\n", f.Content, f.Kind, due, short(f.ID))
+			layer := f.Stability
+			if layer == "" {
+				layer = facts.Stable
+			}
+			if f.Pinned {
+				layer += " · pinned"
+			}
+			fmt.Fprintf(&b, "- %s  [%s · %s]%s (fact:%s)\n", facts.Render(f, nowUnix), f.Kind, layer, due, short(f.ID))
 		}
 		return textResult(b.String()), none{}, nil
 	}

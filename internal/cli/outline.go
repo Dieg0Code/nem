@@ -2,13 +2,13 @@ package cli
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
+	"github.com/Dieg0Code/nem/internal/config"
 	"github.com/Dieg0Code/nem/internal/db"
+	"github.com/Dieg0Code/nem/internal/facts"
 	"github.com/Dieg0Code/nem/internal/timing"
-	"github.com/Dieg0Code/nem/internal/when"
 	"github.com/spf13/cobra"
 )
 
@@ -87,45 +87,34 @@ func runOutline(cmd *cobra.Command, _ string, start string, depth int) error {
 }
 
 // printFacts imprime al tope del outline la memoria durable: los hechos estables
-// (always-loaded) y, aparte, los recordatorios vigentes ordenados por fecha.
-// Silencioso si no hay nada, para no ensuciar la vista.
+// (always-loaded, ordenados por peso y acotados por presupuesto) y, aparte, los
+// recordatorios vigentes ordenados por fecha. La selección/orden/derivación vive
+// en internal/facts (compartida con el servidor MCP). Silencioso si no hay nada.
 func printFacts(cmd *cobra.Command, store db.Store) {
-	facts, err := store.ListFacts(false)
-	if err != nil || len(facts) == 0 {
+	all, err := store.ListFacts(false)
+	if err != nil || len(all) == 0 {
 		return
 	}
 	out := cmd.OutOrStdout()
-	stable, reminders := splitFacts(facts)
+	res := facts.Present(all, time.Now().Unix(), config.FactsBudget())
 
-	if len(stable) > 0 {
+	if len(res.Stable) > 0 {
 		fmt.Fprintln(out, "## Facts (always-loaded)")
-		for _, f := range stable {
-			fmt.Fprintf(out, "- %s  (fact:%s)\n", f.Content, shortHash(f.ID))
+		for _, l := range res.Stable {
+			fmt.Fprintf(out, "- %s  (fact:%s)\n", l.Content, shortHash(l.ID))
+		}
+		if res.Collapsed > 0 {
+			fmt.Fprintf(out, "- … +%d more facts (nem fact list)\n", res.Collapsed)
 		}
 		fmt.Fprintln(out)
 	}
-	if len(reminders) > 0 {
-		nowUnix := time.Now().Unix()
+	if len(res.Reminders) > 0 {
 		fmt.Fprintln(out, "## Reminders")
-		for _, f := range reminders {
-			fmt.Fprintf(out, "- [%s] %s  (fact:%s)\n", when.Humanize(f.DueAt, nowUnix), f.Content, shortHash(f.ID))
+		for _, l := range res.Reminders {
+			fmt.Fprintf(out, "- [%s] %s  (fact:%s)\n", l.Due, l.Content, shortHash(l.ID))
 		}
 		fmt.Fprintln(out)
 	}
-}
-
-// splitFacts separa los hechos estables de los recordatorios con fecha, y
-// ordena los recordatorios por vencimiento (más próximo/atrasado primero).
-func splitFacts(facts []db.Fact) (stable, reminders []db.Fact) {
-	for _, f := range facts {
-		if f.DueAt > 0 {
-			reminders = append(reminders, f)
-		} else {
-			stable = append(stable, f)
-		}
-	}
-	sort.Slice(reminders, func(i, j int) bool { return reminders[i].DueAt < reminders[j].DueAt })
-	return stable, reminders
 }
 
 // printNode imprime un nodo y recurre por sus hijos hasta `depth`.

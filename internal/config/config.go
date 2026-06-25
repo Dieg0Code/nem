@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/BurntSushi/toml"
 )
@@ -23,11 +24,28 @@ type Backend struct {
 	Endpoint string `toml:"endpoint,omitempty"`
 }
 
+// FactsConfig configura la capa semántica siempre-cargada.
+type FactsConfig struct {
+	// Budget es el tope de facts estables siempre-cargados (0 → default).
+	Budget int `toml:"budget,omitempty"`
+}
+
 // File es el contenido completo de ~/.nem/config.toml.
 type File struct {
 	Scopes    map[string]Scope `toml:"scopes,omitempty"`
 	Summarize Backend          `toml:"summarize,omitempty"`
 	Embed     Backend          `toml:"embed,omitempty"`
+	Facts     FactsConfig      `toml:"facts,omitempty"`
+}
+
+// FactsBudget devuelve el presupuesto configurado de la capa de facts, o 0 si no
+// se fijó (el llamador aplica el default). Nunca falla la lectura silenciosa.
+func FactsBudget() int {
+	f, err := Load()
+	if err != nil {
+		return 0
+	}
+	return f.Facts.Budget
 }
 
 // Load lee config.toml. Si no existe, devuelve un File vacío (sin error).
@@ -82,6 +100,7 @@ func Scopes() (map[string]Scope, error) {
 var settableKeys = map[string]bool{
 	"summarize.backend": true, "summarize.model": true, "summarize.endpoint": true,
 	"embed.backend": true, "embed.model": true, "embed.endpoint": true,
+	"facts.budget": true,
 }
 
 // Get devuelve el valor de una clave punteada (p.ej. "summarize.backend").
@@ -103,6 +122,8 @@ func Get(key string) (string, error) {
 		return f.Embed.Model, nil
 	case "embed.endpoint":
 		return f.Embed.Endpoint, nil
+	case "facts.budget":
+		return strconv.Itoa(f.Facts.Budget), nil
 	default:
 		return "", fmt.Errorf("unknown config key %q", key)
 	}
@@ -111,11 +132,19 @@ func Get(key string) (string, error) {
 // Set fija una clave punteada y persiste el archivo.
 func Set(key, value string) error {
 	if !settableKeys[key] {
-		return fmt.Errorf("unknown config key %q (valid: summarize.backend/model/endpoint, embed.backend/model/endpoint)", key)
+		return fmt.Errorf("unknown config key %q (valid: summarize.backend/model/endpoint, embed.backend/model/endpoint, facts.budget)", key)
 	}
 	f, err := Load()
 	if err != nil {
 		return err
+	}
+	if key == "facts.budget" {
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 {
+			return fmt.Errorf("facts.budget must be a non-negative integer, got %q", value)
+		}
+		f.Facts.Budget = n
+		return Save(f)
 	}
 	switch key {
 	case "summarize.backend":
@@ -139,5 +168,6 @@ func Keys() []string {
 	return []string{
 		"summarize.backend", "summarize.model", "summarize.endpoint",
 		"embed.backend", "embed.model", "embed.endpoint",
+		"facts.budget",
 	}
 }

@@ -36,15 +36,16 @@ you would.
 
 And because both Claude Code and Codex read and write the *same* store, they
 stop being separate assistants with separate amnesia and start behaving like one
-mind with one memory. Single binary, SQLite embedded in pure Go (no cgo),
+mind with one memory — and nem now ingests **Google Antigravity** CLI sessions
+into that same store too. Single binary, SQLite embedded in pure Go (no cgo),
 offline.
 
 ## The part nobody mentions
 
 **Did you know your agent's entire history is already sitting on your disk?**
 
-Claude Code and Codex write **every session to your local disk** — plain files,
-on your machine, right now. That's the raw material: the reasoning, the
+Claude Code, Codex and Antigravity write **every session to your local disk** —
+plain files, on your machine, right now. That's the raw material: the reasoning, the
 dead-ends, the decisions you arrived at together. But it's inert. The agent can't
 recall it next time and you can't search it; it just piles up and goes stale.
 
@@ -87,7 +88,7 @@ facts. You stay in control of one thing: `nem sync` (sharing) is yours.
 
 | | |
 |---|---|
-| `nem init` / `ingest` | set up `~/.nem`; pull in Codex & Claude Code sessions |
+| `nem init` / `ingest` | set up `~/.nem`; pull in Codex, Claude Code & Antigravity sessions |
 | `nem status` / `log` | active session; commit history |
 | `nem add` / `commit` | stage messages; freeze them into an immutable snapshot |
 | `nem fact` | durable facts + dated reminders (`--due`) — surfaced at the top of every session |

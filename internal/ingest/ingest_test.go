@@ -92,6 +92,70 @@ func TestClaudeParser_Parse(t *testing.T) {
 	}
 }
 
+func TestAntigravityParser_Parse(t *testing.T) {
+	const session = `
+{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-05-22T23:14:50Z","content":"<USER_REQUEST>\narregla el bug\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: 2026-05-22T19:14:50-04:00.\n</ADDITIONAL_METADATA>"}
+{"step_index":1,"source":"SYSTEM","type":"CONVERSATION_HISTORY","status":"DONE","created_at":"2026-05-22T23:14:50Z"}
+{"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-05-22T23:14:51Z","content":"Voy a listar el directorio.","tool_calls":[{"name":"list_dir","args":{"DirectoryPath":"\"C:\\\\Users\\\\Diego Obando\\\\dev\\\\nem\""}}]}
+{"step_index":3,"source":"MODEL","type":"LIST_DIRECTORY","status":"DONE","created_at":"2026-05-22T23:14:52Z","content":"{\"name\":\"main.go\"}"}
+{"step_index":4,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-05-22T23:14:53Z","content":"Listo, arreglado."}
+{"step_index":5,"source":"SYSTEM","type":"ERROR_MESSAGE","status":"DONE","created_at":"2026-05-22T23:14:54Z","content":"transient error"}
+`
+	path := filepath.Join("brain", "febc0852-250c-4f04-844f-8940e7e3e33a", ".system_generated", "logs", "transcript.jsonl")
+	pc, err := NewAntigravityParser().Parse(strings.NewReader(session), path)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	if pc.Chat.ID != "febc0852-250c-4f04-844f-8940e7e3e33a" {
+		t.Errorf("chat id = %q", pc.Chat.ID)
+	}
+	if pc.Chat.Title != "nem" {
+		t.Errorf("title = %q, want nem", pc.Chat.Title)
+	}
+	if pc.Chat.Source != "antigravity" {
+		t.Errorf("source = %q", pc.Chat.Source)
+	}
+
+	// user(desenvuelto), assistant(narración)+tool(list_dir), tool(salida), assistant.
+	// SYSTEM (history, error) se ignora.
+	wantRoles := []string{RoleUser, RoleAssistant, RoleTool, RoleTool, RoleAssistant}
+	if len(pc.Messages) != len(wantRoles) {
+		t.Fatalf("got %d messages, want %d: %v", len(pc.Messages), len(wantRoles), roles(pc.Messages))
+	}
+	for i, want := range wantRoles {
+		if pc.Messages[i].Role != want {
+			t.Errorf("msg %d role = %q, want %q", i, pc.Messages[i].Role, want)
+		}
+	}
+	if got := pc.Messages[0].Content; got != "arregla el bug" {
+		t.Errorf("user text = %q, want unwrapped 'arregla el bug'", got)
+	}
+	if got := pc.Messages[2].Content; !strings.Contains(got, "list_dir") || !strings.Contains(got, "DirectoryPath") {
+		t.Errorf("tool call content = %q", got)
+	}
+	// ids estables derivados de conv-id + step + block.
+	if pc.Messages[1].ID != "febc0852-250c-4f04-844f-8940e7e3e33a:2:0" ||
+		pc.Messages[2].ID != "febc0852-250c-4f04-844f-8940e7e3e33a:2:1" {
+		t.Errorf("block ids = %q, %q", pc.Messages[1].ID, pc.Messages[2].ID)
+	}
+}
+
+func TestAntigravityParser_SkipsNonTranscript(t *testing.T) {
+	// El walker compartido encuentra transcript_full.jsonl e history.jsonl; el
+	// parser debe ignorarlos (devolver chat sin mensajes -> contado skipped).
+	const full = `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-05-22T23:14:50Z","content":"hola"}`
+	for _, name := range []string{"transcript_full.jsonl", "history.jsonl"} {
+		pc, err := NewAntigravityParser().Parse(strings.NewReader(full), filepath.Join("brain", "id", ".system_generated", "logs", name))
+		if err != nil {
+			t.Fatalf("Parse(%s) error = %v", name, err)
+		}
+		if len(pc.Messages) != 0 {
+			t.Errorf("Parse(%s) returned %d messages, want 0 (skipped)", name, len(pc.Messages))
+		}
+	}
+}
+
 func TestTruncate(t *testing.T) {
 	tests := []struct {
 		name string

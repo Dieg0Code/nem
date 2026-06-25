@@ -7,13 +7,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newIngestCmd crea `nem ingest [codex|claude]`. Sin argumento ingesta ambos.
+// newIngestCmd crea `nem ingest [codex|claude|antigravity]`. Sin argumento
+// ingesta todos.
 func newIngestCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:       "ingest [codex|claude]",
-		Short:     "Ingest Codex and/or Claude Code sessions into the nem store",
+		Use:       "ingest [codex|claude|antigravity]",
+		Short:     "Ingest Codex, Claude Code and/or Antigravity sessions into the nem store",
 		Args:      cobra.MaximumNArgs(1),
-		ValidArgs: []string{"codex", "claude"},
+		ValidArgs: []string{"codex", "claude", "antigravity"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runIngest(cmd, args)
 		},
@@ -30,13 +31,15 @@ func runIngest(cmd *cobra.Command, args []string) error {
 	var parsers []ingest.Parser
 	switch {
 	case len(args) == 0:
-		parsers = []ingest.Parser{ingest.NewCodexParser(), ingest.NewClaudeParser()}
+		parsers = []ingest.Parser{ingest.NewCodexParser(), ingest.NewClaudeParser(), ingest.NewAntigravityParser()}
 	case args[0] == "codex":
 		parsers = []ingest.Parser{ingest.NewCodexParser()}
 	case args[0] == "claude":
 		parsers = []ingest.Parser{ingest.NewClaudeParser()}
+	case args[0] == "antigravity":
+		parsers = []ingest.Parser{ingest.NewAntigravityParser()}
 	default:
-		return fmt.Errorf("unknown source %q (use 'codex' or 'claude')", args[0])
+		return fmt.Errorf("unknown source %q (use 'codex', 'claude' or 'antigravity')", args[0])
 	}
 
 	out := cmd.OutOrStdout()

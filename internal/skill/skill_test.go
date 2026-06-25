@@ -51,6 +51,24 @@ func TestInstall_BothAgents(t *testing.T) {
 	}
 }
 
+func TestInstall_Antigravity(t *testing.T) {
+	ag := t.TempDir()
+	inst, err := New(WithAntigravityRoot(ag), WithContent("X"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	rep, err := inst.Install()
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if len(rep.Installed) != 1 || rep.Installed[0].Agent != "antigravity" {
+		t.Fatalf("installed = %+v, want only antigravity", rep.Installed)
+	}
+	if _, ok := readSkill(t, ag); !ok {
+		t.Errorf("SKILL.md missing under antigravity root")
+	}
+}
+
 func TestInstall_AgentAbsentIsSkipped(t *testing.T) {
 	claude := t.TempDir()
 	codex := filepath.Join(t.TempDir(), "does-not-exist")

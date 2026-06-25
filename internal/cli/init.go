@@ -13,20 +13,22 @@ import (
 // newInitCmd crea el comando `nem init`: prepara ~/.nem/, store/ y la base
 // SQLite con el esquema migrado. Es idempotente.
 func newInitCmd() *cobra.Command {
-	var noSkill bool
+	var noSkill, noIngest bool
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialize the local nem store in ~/.nem",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInit(cmd, noSkill)
+			return runInit(cmd, noSkill, noIngest)
 		},
 	}
 	cmd.Flags().BoolVar(&noSkill, "no-skill", false,
-		"do not install the nem agent skill into Claude Code / Codex")
+		"do not install the nem agent skill into Claude Code / Codex / Antigravity")
+	cmd.Flags().BoolVar(&noIngest, "no-ingest", false,
+		"do not ingest existing agent sessions on init")
 	return cmd
 }
 
-func runInit(cmd *cobra.Command, noSkill bool) error {
+func runInit(cmd *cobra.Command, noSkill, noIngest bool) error {
 	dir, err := config.Dir()
 	if err != nil {
 		return err
@@ -58,12 +60,22 @@ func runInit(cmd *cobra.Command, noSkill bool) error {
 		return err
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "nem initialized at %s\n", dir)
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "nem initialized at %s\n", dir)
+
+	// Trae las sesiones existentes para que el store sea útil de inmediato
+	// (idempotente; no fatal: el store ya quedó usable).
+	if !noIngest {
+		fmt.Fprintln(out, "ingesting agent sessions...")
+		if err := ingestSessions(out, store, allParsers()); err != nil {
+			fmt.Fprintf(out, "warning: ingest incomplete: %v\n", err)
+		}
+	}
 
 	// Instala el agent skill (no fatal: el store ya quedó usable).
 	if !noSkill {
 		if err := installSkill(cmd); err != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "warning: could not install agent skill: %v\n", err)
+			fmt.Fprintf(out, "warning: could not install agent skill: %v\n", err)
 		}
 	}
 	return nil

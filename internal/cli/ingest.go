@@ -2,7 +2,9 @@ package cli
 
 import (
 	"fmt"
+	"io"
 
+	"github.com/Dieg0Code/nem/internal/db"
 	"github.com/Dieg0Code/nem/internal/ingest"
 	"github.com/spf13/cobra"
 )
@@ -21,6 +23,17 @@ func newIngestCmd() *cobra.Command {
 	}
 }
 
+// allParsers devuelve los parsers de todos los agentes soportados, en el orden
+// en que se reportan. Fuente única que comparten `nem ingest` (sin args) y
+// `nem init`.
+func allParsers() []ingest.Parser {
+	return []ingest.Parser{
+		ingest.NewCodexParser(),
+		ingest.NewClaudeParser(),
+		ingest.NewAntigravityParser(),
+	}
+}
+
 func runIngest(cmd *cobra.Command, args []string) error {
 	store, err := openStore()
 	if err != nil {
@@ -31,7 +44,7 @@ func runIngest(cmd *cobra.Command, args []string) error {
 	var parsers []ingest.Parser
 	switch {
 	case len(args) == 0:
-		parsers = []ingest.Parser{ingest.NewCodexParser(), ingest.NewClaudeParser(), ingest.NewAntigravityParser()}
+		parsers = allParsers()
 	case args[0] == "codex":
 		parsers = []ingest.Parser{ingest.NewCodexParser()}
 	case args[0] == "claude":
@@ -42,7 +55,12 @@ func runIngest(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("unknown source %q (use 'codex', 'claude' or 'antigravity')", args[0])
 	}
 
-	out := cmd.OutOrStdout()
+	return ingestSessions(cmd.OutOrStdout(), store, parsers)
+}
+
+// ingestSessions corre cada parser contra el store e imprime un resumen por
+// agente. Compartido por `nem ingest` y `nem init`.
+func ingestSessions(out io.Writer, store db.Store, parsers []ingest.Parser) error {
 	for _, p := range parsers {
 		rep, err := ingest.Ingest(store, p)
 		if err != nil {

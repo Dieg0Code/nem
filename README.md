@@ -34,11 +34,10 @@ recallable structure: **immutable commits**, a **navigable index tree**, and
 **durable facts** — so any agent can bring it back later with the same commands
 you would.
 
-And because both Claude Code and Codex read and write the *same* store, they
-stop being separate assistants with separate amnesia and start behaving like one
-mind with one memory — and nem now ingests **Google Antigravity** CLI sessions
-into that same store too. Single binary, SQLite embedded in pure Go (no cgo),
-offline.
+And because Claude Code, Codex and **Google Antigravity** all read and write the
+*same* store, they stop being separate assistants with separate amnesia and start
+behaving like one mind with one memory. Single binary, SQLite embedded in pure Go
+(no cgo), offline.
 
 ## The part nobody mentions
 
@@ -70,8 +69,9 @@ go install github.com/Dieg0Code/nem/cmd/nem@latest
 
 ## How your agent uses it
 
-`nem init` installs a skill into Claude Code and Codex. The agent **recalls** at
-the start of a session and **persists** what it resolves — no human in the loop:
+`nem init` installs the skill into Claude Code, Codex and Antigravity, and pulls
+in your existing sessions. The agent **recalls** at the start of a session and
+**persists** what it resolves — no human in the loop:
 
 ```bash
 nem outline                         # the map: facts + project → chat → commit

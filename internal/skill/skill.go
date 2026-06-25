@@ -1,7 +1,8 @@
 // Package skill instala el "agent skill" de nem: un SKILL.md que le enseña al
-// agente (Claude Code, Codex) cuándo y cómo usar nem, cerrando el loop de que
-// el agente persista su propio contexto. nem es dueño del subdirectorio "nem"
-// dentro de skills/ y lo regenera de forma idempotente; nunca toca otros skills.
+// agente (Claude Code, Codex, Antigravity) cuándo y cómo usar nem, cerrando el
+// loop de que el agente persista su propio contexto. nem es dueño del
+// subdirectorio "nem" dentro de skills/ y lo regenera de forma idempotente;
+// nunca toca otros skills.
 package skill
 
 import (
@@ -17,9 +18,9 @@ const skillName = "nem"
 
 // Agent identifica a un agente soportado por la instalación del skill.
 type Agent struct {
-	// Name es el identificador del agente: "claude" | "codex".
+	// Name es el identificador del agente: "claude" | "codex" | "antigravity".
 	Name string
-	// Root es el home del agente (~/.claude o ~/.codex).
+	// Root es el home del agente (~/.claude, ~/.codex o ~/.gemini/antigravity-cli).
 	Root string
 }
 
@@ -73,6 +74,18 @@ func WithCodexRoot(root string) Option {
 	}
 }
 
+// WithAntigravityRoot fija el home del CLI de Antigravity
+// (default ~/.gemini/antigravity-cli). Útil para tests.
+func WithAntigravityRoot(root string) Option {
+	return func(c *config) error {
+		if root == "" {
+			return errors.New("antigravity root cannot be empty")
+		}
+		c.agents = append(c.agents, Agent{Name: "antigravity", Root: root})
+		return nil
+	}
+}
+
 // WithContent reemplaza el contenido del skill (default: el SKILL.md embebido).
 // Pensado para tests; en producción se usa el template compilado.
 func WithContent(content string) Option {
@@ -85,8 +98,9 @@ func WithContent(content string) Option {
 	}
 }
 
-// New crea un Installer. Sin WithClaudeRoot/WithCodexRoot usa los homes por
-// defecto (~/.claude y ~/.codex) derivados de os.UserHomeDir().
+// New crea un Installer. Sin WithClaudeRoot/WithCodexRoot/WithAntigravityRoot
+// usa los homes por defecto (~/.claude, ~/.codex, ~/.gemini/antigravity-cli)
+// derivados de os.UserHomeDir().
 func New(options ...Option) (Installer, error) {
 	cfg := &config{content: skillTemplate}
 	for _, option := range options {
@@ -111,8 +125,9 @@ type installer struct {
 	cfg *config
 }
 
-// defaultAgents arma la lista de agentes por defecto (~/.claude, ~/.codex),
-// consistente con los DefaultRoot de los parsers de ingest.
+// defaultAgents arma la lista de agentes por defecto (~/.claude, ~/.codex,
+// ~/.gemini/antigravity-cli), consistente con los DefaultRoot de los parsers de
+// ingest.
 func defaultAgents() ([]Agent, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -121,6 +136,7 @@ func defaultAgents() ([]Agent, error) {
 	return []Agent{
 		{Name: "claude", Root: filepath.Join(home, ".claude")},
 		{Name: "codex", Root: filepath.Join(home, ".codex")},
+		{Name: "antigravity", Root: filepath.Join(home, ".gemini", "antigravity-cli")},
 	}, nil
 }
 

@@ -86,9 +86,33 @@ func NewDetector(options ...Option) (Detector, error) {
 
 var uuidRE = regexp.MustCompile(`([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})`)
 
-// Detect compara el .jsonl más reciente de Codex y de Claude y devuelve el más
-// nuevo como la sesión activa.
+// agentSessionEnv mapea las variables que cada harness setea SOLO (sin que el
+// usuario configure nada) con el id de su sesión activa, a su fuente en nem.
+var agentSessionEnv = []struct{ key, source string }{
+	{"CLAUDE_CODE_SESSION_ID", "claude"},
+	{"CODEX_COMPANION_SESSION_ID", "codex"},
+}
+
+// fromEnv resuelve la sesión que el propio agente declara en su entorno. Es la
+// verdad exacta de "qué sesión soy" — sin la carrera de mtime entre agentes
+// concurrentes. Devuelve nil si ningún harness la expuso.
+func fromEnv() *Session {
+	for _, e := range agentSessionEnv {
+		if id := strings.TrimSpace(os.Getenv(e.key)); id != "" {
+			return &Session{ChatID: id, Source: e.source}
+		}
+	}
+	return nil
+}
+
+// Detect devuelve la sesión activa. Primero confía en la que el agente declara en
+// su entorno (exacta, robusta ante varios agentes en paralelo); si no hay ninguna,
+// cae al heurístico del .jsonl más reciente entre Codex y Claude.
 func (d *detector) Detect() (*Session, error) {
+	if s := fromEnv(); s != nil {
+		return s, nil
+	}
+
 	codex := newest(d.codexRoot)
 	claude := newest(d.claudeRoot)
 

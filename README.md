@@ -97,6 +97,7 @@ facts. You stay in control of one thing: `nem sync` (sharing) is yours.
 | `nem annotate` | rewrite a node's summary (pinned; survives re-index) |
 | `nem index` | (re)build the tree — incremental, only computes what's new |
 | `nem sync` / `clone` | push/pull to a git remote, **redacting secrets first** |
+| `nem team` | shared **team stores**: a common memory base for a whole team |
 | `nem doctor` | check/install the optional pro deps |
 
 ## How it works
@@ -114,6 +115,27 @@ facts. You stay in control of one thing: `nem sync` (sharing) is yours.
   feedback** (co-occurrence expansion) lift recall without any external model.
 - **Mutable summary layer** — `nem annotate` lets the agent curate how a commit is
   described and found, without touching the immutable content.
+
+## Team memory
+
+A team store is just another nem store at `~/.nem/teams/<name>/` with its own
+git remote — a **common memory base** a whole team (humans *and* their agents)
+pushes curated commits and facts to, so work isn't duplicated. Your personal
+`~/.nem` stays private: nothing reaches the team unless you commit it there.
+
+```bash
+nem team add acme git@github.com:acme/nem-memory.git   # clone a shared store
+nem commit --team acme -m "decided: auth via JWT"      # curate into the team
+nem fact add --team acme "we deploy on Fridays"        # a shared durable fact
+nem team sync acme                                     # publish (redacts secrets)
+```
+
+Reads are **federated by default**: `nem search` and `nem outline` span your
+personal store *plus* every team, tagging each hit by origin (`[team:acme]`) and
+its author — so before starting, an agent sees *"Ana already resolved this"*.
+Scope it with `--team <name>` or `--local`. Commits are content-addressed, so the
+same work committed by two people de-dups by hash; shared facts merge by
+last-writer-wins (retire them with `--supersedes`/`fact done`, which propagate).
 
 ## Optional: the semantic layer
 

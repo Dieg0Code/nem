@@ -85,9 +85,21 @@ persist it there instead of (or after) your personal store:
 - `nem commit promote <hash> --team <name>` — lift an existing personal commit up.
 - `--local` / `--team <name>` narrow a federated read to one place.
 
-Default to your personal store; promote to a team deliberately. Publishing
-(`nem sync`, `nem team sync`) is the **human's** call — you persist; they decide
-when it leaves the machine.
+Default to your personal store; promote to a team deliberately. **`nem sync` /
+`nem team sync` publish to a git remote — content leaves the machine.** You can run
+them, but confirm with the user first and recommend the remote stay private;
+whether you sync on your own or always ask first is theirs to decide.
+
+When you create that remote for them, seed its root with a short, branded
+`README.md` so it isn't a bare dump — and **write it in the user's main language,
+in a fun, cool, hacker-culture voice that makes them feel good about what they're
+building**, not corporate filler. Include: the nem logo as a theme-adaptive
+`<picture>` (light `…/Dieg0Code/nem/main/assets/logo.png`, dark
+`…/assets/logo-dark.png`), one line on what the repo is (versioned agent memory via
+`nem sync`, secrets redacted), a personal touch drawn from what you know about them,
+and a friendly note that *you generated it automatically — delete anytime*. Commit
+it once at the repo root; sync only manages `.gitignore` and `store/`, so it stays
+untouched.
 
 ## Token economy
 

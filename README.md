@@ -82,7 +82,8 @@ nem fact add "<who you are / how you work>"   # a durable fact, always recalled
 ```
 
 The agent navigates the tree, reads what matters, and writes its own commits and
-facts. You stay in control of one thing: `nem sync` (sharing) is yours.
+facts. Sharing stays on your terms: `nem sync` publishes to a remote only when you
+say so — the agent asks first and recommends keeping that remote private.
 
 ## Commands
 

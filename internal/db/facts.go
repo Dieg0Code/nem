@@ -16,6 +16,35 @@ func (s *store) AddFact(f *Fact) error {
 	return nil
 }
 
+// UpsertFact inserta f, o lo reemplaza si ya existe y el entrante es al menos tan
+// nuevo (UpdatedAt >= el existente). Es el reconciliador de facts en sync entre
+// máquinas: last-writer-wins por UpdatedAt (supersede/done/pinned viajan juntos).
+func (s *store) UpsertFact(f *Fact) error {
+	var existing Fact
+	err := s.gdb.Where("id = ?", f.ID).First(&existing).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		if err := s.gdb.Create(f).Error; err != nil {
+			return fmt.Errorf("failed to insert fact: %w", err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to look up fact: %w", err)
+	}
+	// Empate incluido: solo un entrante ESTRICTAMENTE más nuevo reemplaza. Así el
+	// re-import del propio export es idempotente — clave porque el export REDACTA el
+	// contenido: con <=, reimportar tu propio fact redactado NO pisa el original en
+	// claro de tu DB local (mismo UpdatedAt). Un update real (supersede/done) sí
+	// bumpea UpdatedAt y gana.
+	if f.UpdatedAt <= existing.UpdatedAt {
+		return nil // el existente es al menos tan nuevo: se conserva
+	}
+	if err := s.gdb.Save(f).Error; err != nil {
+		return fmt.Errorf("failed to update fact: %w", err)
+	}
+	return nil
+}
+
 // ListFacts devuelve las afirmaciones de la más nueva a la más vieja. Por
 // defecto solo las VIGENTES (ni reemplazadas ni completadas);
 // includeInactive=true incluye las superseded y los reminders done (el rastro).

@@ -17,6 +17,10 @@ type Item struct {
 	NodeKind  string // project|chat|commit (hits de nodo)
 	Content   string // snippet o summary
 	Timestamp int64
+	// StoreID es el origen del item en lectura federada: "" = store personal,
+	// si no el nombre del team store. Participa de itemKey, así un mismo ID local
+	// en stores distintos (p.ej. tras promover un chat) no colapsa en uno.
+	StoreID string
 }
 
 // Channel es una lista de items ya ordenada por relevancia (mejor primero).
@@ -46,8 +50,10 @@ func WithRRFK(k float64) Option { return func(c *config) { c.k = k } }
 func WithRecencyWeight(w float64) Option { return func(c *config) { c.recency = w } }
 
 // itemKey identifica un item de forma única entre canales (mismo item en varios
-// canales se refuerza, que es la gracia de RRF).
-func itemKey(it Item) string { return it.Kind + "\x00" + it.ID }
+// canales se refuerza, que es la gracia de RRF). Incluye StoreID para que el mismo
+// ID local en stores distintos no se funda: en lectura no-federada todos los items
+// comparten StoreID vacío, así el refuerzo intra-store se mantiene intacto.
+func itemKey(it Item) string { return it.StoreID + "\x00" + it.Kind + "\x00" + it.ID }
 
 // Fuse combina los canales por RRF + recencia y devuelve los top `limit`.
 func Fuse(channels []Channel, limit int, options ...Option) []Scored {

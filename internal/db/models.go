@@ -36,6 +36,9 @@ type Commit struct {
 	MsgTo     string // id del último mensaje del rango
 	Snapshot  string // JSON con el texto copiado de los mensajes (inmutable)
 	CreatedAt int64
+	// Author identifica a quién atribuir el commit en stores compartidos (de
+	// config user.name). Metadata: NO entra al hash. Aditivo; filas viejas "".
+	Author string
 }
 
 // Staging es el index git-like: los mensajes marcados con `nem add` que esperan
@@ -77,6 +80,7 @@ type Fact struct {
 	Content      string // la afirmación, escrita por el agente/humano
 	Kind         string `gorm:"index"` // note (default) | reminder | schedule
 	Source       string // quién la afirmó: claude | codex | human
+	Author       string // a quién atribuirla en un team store (config user.name)
 	CreatedAt    int64
 	UpdatedAt    int64
 	Superseded   bool   `gorm:"index"` // reemplazada por una afirmación posterior

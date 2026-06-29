@@ -60,6 +60,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newAnnotateCmd())
 	root.AddCommand(newStatsCmd())
 	root.AddCommand(newFactCmd())
+	root.AddCommand(newTeamCmd())
 
 	return root
 }

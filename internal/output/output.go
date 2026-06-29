@@ -65,6 +65,9 @@ type Doc struct {
 	Date     time.Time
 	Messages []SnapMessage
 	Commit   *db.Commit
+	// Origin etiqueta de qué store vino el doc en lectura federada (p.ej.
+	// "personal" | "team:acme"). Vacío = no se muestra.
+	Origin string
 }
 
 // Render produce la representación de doc en el formato pedido.
@@ -85,14 +88,26 @@ func Render(doc Doc, format string) (string, error) {
 // ruido, roles como prefijo, y el commit al pie.
 func renderLLM(doc Doc) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "[%s | %s | %s]\n\n", doc.Date.Format("2006-01-02"), doc.Source, doc.Title)
+	if doc.Origin != "" {
+		fmt.Fprintf(&b, "[%s | %s | %s | %s]\n\n", doc.Origin, doc.Date.Format("2006-01-02"), doc.Source, doc.Title)
+	} else {
+		fmt.Fprintf(&b, "[%s | %s | %s]\n\n", doc.Date.Format("2006-01-02"), doc.Source, doc.Title)
+	}
 	for _, m := range doc.Messages {
 		fmt.Fprintf(&b, "%s: %s\n", m.Role, m.Content)
 	}
 	if doc.Commit != nil {
-		fmt.Fprintf(&b, "\n— commit %s: %q\n", short(doc.Commit.Hash), doc.Commit.Message)
+		fmt.Fprintf(&b, "\n— commit %s%s: %q\n", short(doc.Commit.Hash), byAuthor(doc.Commit.Author), doc.Commit.Message)
 	}
 	return b.String()
+}
+
+// byAuthor formatea la atribución de un commit (" by <author>"), vacío si no hay.
+func byAuthor(author string) string {
+	if author == "" {
+		return ""
+	}
+	return " by " + author
 }
 
 // renderMarkdown produce salida legible para humanos.
@@ -103,9 +118,13 @@ func renderMarkdown(doc Doc) string {
 		title = "(untitled)"
 	}
 	fmt.Fprintf(&b, "# %s\n\n", title)
-	fmt.Fprintf(&b, "_%s · %s_\n\n", doc.Source, doc.Date.Format("2006-01-02 15:04"))
+	if doc.Origin != "" {
+		fmt.Fprintf(&b, "_%s · %s · %s_\n\n", doc.Origin, doc.Source, doc.Date.Format("2006-01-02 15:04"))
+	} else {
+		fmt.Fprintf(&b, "_%s · %s_\n\n", doc.Source, doc.Date.Format("2006-01-02 15:04"))
+	}
 	if doc.Commit != nil {
-		fmt.Fprintf(&b, "**commit %s** — %s\n\n", short(doc.Commit.Hash), doc.Commit.Message)
+		fmt.Fprintf(&b, "**commit %s**%s — %s\n\n", short(doc.Commit.Hash), byAuthor(doc.Commit.Author), doc.Commit.Message)
 	}
 	for _, m := range doc.Messages {
 		fmt.Fprintf(&b, "**%s**\n\n%s\n\n", m.Role, m.Content)
@@ -121,11 +140,18 @@ func renderJSON(doc Doc) (string, error) {
 		"date":     doc.Date.Format(time.RFC3339),
 		"messages": doc.Messages,
 	}
+	if doc.Origin != "" {
+		payload["origin"] = doc.Origin
+	}
 	if doc.Commit != nil {
-		payload["commit"] = map[string]any{
+		commit := map[string]any{
 			"hash":    doc.Commit.Hash,
 			"message": doc.Commit.Message,
 		}
+		if doc.Commit.Author != "" {
+			commit["author"] = doc.Commit.Author
+		}
+		payload["commit"] = commit
 	}
 	b, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {

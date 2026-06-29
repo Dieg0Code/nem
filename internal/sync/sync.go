@@ -31,6 +31,7 @@ type exportHeader struct {
 	ChatSource string `json:"chat_source"`
 	Branch     string `json:"branch"`
 	Message    string `json:"message"`
+	Author     string `json:"author,omitempty"`
 	CreatedAt  int64  `json:"created_at"`
 }
 
@@ -45,10 +46,12 @@ type exportMsg struct {
 
 // Report resume una corrida de sync.
 type Report struct {
-	Exported int
-	Imported int
-	Redacted map[string]int
-	Pushed   bool
+	Exported      int
+	Imported      int
+	FactsExported int
+	FactsImported int
+	Redacted      map[string]int
+	Pushed        bool
 }
 
 // Syncer orquesta export → git → import.
@@ -148,6 +151,14 @@ func (s *syncer) Sync() (*Report, error) {
 	}
 	report := &Report{Exported: exported, Redacted: counts}
 
+	// Los facts (memoria semántica) también viajan: es lo más valioso de compartir
+	// en un store de equipo. Se redactan con el mismo contador (frontera de egress).
+	factsExported, err := s.exportFacts(counts)
+	if err != nil {
+		return nil, err
+	}
+	report.FactsExported = factsExported
+
 	// add -A versiona store/ y .gitignore; nem.db queda excluido por el ignore.
 	if err := s.git.addAll(".gitignore", "store"); err != nil {
 		return nil, err
@@ -175,12 +186,26 @@ func (s *syncer) Sync() (*Report, error) {
 		return nil, err
 	}
 	report.Imported = imported
+
+	factsImported, err := s.importFacts()
+	if err != nil {
+		return nil, err
+	}
+	report.FactsImported = factsImported
 	return report, nil
 }
 
-// Import reimporta los archivos de commit del store a la DB (para clone).
+// Import reimporta los archivos de commit y de facts del store a la DB (para
+// clone / team add). Devuelve cuántos commits se importaron.
 func (s *syncer) Import() (int, error) {
-	return s.importAll()
+	imported, err := s.importAll()
+	if err != nil {
+		return 0, err
+	}
+	if _, err := s.importFacts(); err != nil {
+		return imported, err
+	}
+	return imported, nil
 }
 
 // export escribe un archivo JSONL por commit, redactando el contenido. Devuelve
@@ -227,7 +252,7 @@ func (s *syncer) writeCommitFile(c db.Commit, title, source string, snap []outpu
 	header := exportHeader{
 		Type: "commit", Hash: c.Hash, ChatID: c.ChatID,
 		ChatTitle: title, ChatSource: source, Branch: c.Branch,
-		Message: c.Message, CreatedAt: c.CreatedAt,
+		Message: c.Message, Author: c.Author, CreatedAt: c.CreatedAt,
 	}
 	if err := writeJSONL(w, header); err != nil {
 		return err
@@ -335,7 +360,7 @@ func (s *syncer) importFile(path string) (bool, error) {
 	}
 	commit := &db.Commit{
 		Hash: header.Hash, ChatID: header.ChatID, Branch: header.Branch,
-		Message: header.Message, Snapshot: snapshot, CreatedAt: header.CreatedAt,
+		Message: header.Message, Author: header.Author, Snapshot: snapshot, CreatedAt: header.CreatedAt,
 	}
 	if len(msgs) > 0 {
 		commit.MsgFrom = msgs[0].ID

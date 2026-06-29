@@ -21,21 +21,76 @@ func newReadCmd() *cobra.Command {
 	var (
 		format   string
 		chatFlag string
+		team     string
 	)
 	cmd := &cobra.Command{
 		Use:   "read <HEAD|hash|commit:hash|chat:id>",
 		Short: "Show the contents of a commit or chat node",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRead(cmd, chatFlag, args[0], format)
+			return runRead(cmd, chatFlag, args[0], format, team)
 		},
 	}
 	cmd.Flags().StringVar(&format, "format", output.FormatMarkdown, "llm | json | markdown")
 	cmd.Flags().StringVar(&chatFlag, "chat", "", "chat id (for HEAD; default: detected session)")
+	cmd.Flags().StringVar(&team, "team", "", "resolve the commit only in this team store")
 	return cmd
 }
 
-func runRead(cmd *cobra.Command, chatFlag, ref, format string) error {
+func runRead(cmd *cobra.Command, chatFlag, ref, format, team string) error {
+	// HEAD y chat: están atados a la sesión local → siempre el store personal.
+	if strings.EqualFold(ref, "HEAD") || strings.HasPrefix(ref, "chat:") {
+		return runReadLocal(cmd, chatFlag, ref, format)
+	}
+
+	// Commit por hash/commit:<hash>: se resuelve de forma federada (personal +
+	// teams), o acotado a --team. El primer match único gana; ambigüedad entre
+	// stores pide desambiguar con --team.
+	stores, err := readStores(cmd, team)
+	if err != nil {
+		return err
+	}
+	defer closeStores(stores)
+
+	bare := strings.TrimPrefix(ref, "commit:")
+	var (
+		found *db.Commit
+		owner namedStore
+		hits  int
+	)
+	for _, ns := range stores {
+		c, err := ns.Store.GetCommit(bare)
+		if err != nil {
+			return fmt.Errorf("in %s: %w", originTag(ns.Name), err)
+		}
+		if c != nil {
+			found, owner = c, ns
+			hits++
+		}
+	}
+	if hits == 0 {
+		return fmt.Errorf("commit %q not found", ref)
+	}
+	if hits > 1 {
+		return fmt.Errorf("commit %q exists in more than one store; disambiguate with --team <name> or a longer hash", ref)
+	}
+
+	// El scope solo aplica al store personal (sus chat ids).
+	if owner.Name == "" {
+		allowed, scoped, err := resolveScope(cmd, owner.Store)
+		if err != nil {
+			return err
+		}
+		if scoped && !inScope(allowed, found.ChatID) {
+			return fmt.Errorf("commit %q not found in scope %q", ref, activeScopeName(cmd))
+		}
+	}
+	return renderCommit(cmd, owner.Store, found, originTag(owner.Name), format)
+}
+
+// runReadLocal maneja las refs atadas a la sesión (HEAD y chat:<id>) contra el
+// store personal, respetando el scope activo.
+func runReadLocal(cmd *cobra.Command, chatFlag, ref, format string) error {
 	store, err := openStore()
 	if err != nil {
 		return err
@@ -47,7 +102,6 @@ func runRead(cmd *cobra.Command, chatFlag, ref, format string) error {
 		return err
 	}
 
-	// Nodo de chat: drill-down a los últimos mensajes de conversación.
 	if strings.HasPrefix(ref, "chat:") {
 		chatID := strings.TrimPrefix(ref, "chat:")
 		if scoped && !inScope(allowed, chatID) {
@@ -56,8 +110,7 @@ func runRead(cmd *cobra.Command, chatFlag, ref, format string) error {
 		return readChat(cmd, store, chatID, format)
 	}
 
-	// Commit: HEAD, hash, o commit:<hash>.
-	commit, err := resolveCommit(store, chatFlag, strings.TrimPrefix(ref, "commit:"))
+	commit, err := resolveCommit(store, chatFlag, ref)
 	if err != nil {
 		return err
 	}
@@ -67,7 +120,11 @@ func runRead(cmd *cobra.Command, chatFlag, ref, format string) error {
 	if scoped && !inScope(allowed, commit.ChatID) {
 		return fmt.Errorf("commit %q not found in scope %q", ref, activeScopeName(cmd))
 	}
+	return renderCommit(cmd, store, commit, "", format)
+}
 
+// renderCommit renderiza un commit resuelto, con su origen (vacío = sin etiqueta).
+func renderCommit(cmd *cobra.Command, store db.Store, commit *db.Commit, origin, format string) error {
 	snap, err := output.ParseSnapshot(commit.Snapshot)
 	if err != nil {
 		return err
@@ -80,6 +137,7 @@ func runRead(cmd *cobra.Command, chatFlag, ref, format string) error {
 		Date:     time.Unix(commit.CreatedAt, 0),
 		Messages: snap,
 		Commit:   commit,
+		Origin:   origin,
 	}
 	if chat != nil {
 		doc.Title = chat.Title
@@ -91,6 +149,26 @@ func runRead(cmd *cobra.Command, chatFlag, ref, format string) error {
 	}
 	fmt.Fprintln(cmd.OutOrStdout(), rendered)
 	return nil
+}
+
+// readStores resuelve los stores donde buscar un commit por hash: --team acota a
+// un team; un --scope activo acota al personal; por defecto personal + teams.
+func readStores(cmd *cobra.Command, team string) ([]namedStore, error) {
+	if team != "" {
+		s, err := openStoreFor(team)
+		if err != nil {
+			return nil, err
+		}
+		return []namedStore{{Name: team, Store: s}}, nil
+	}
+	if activeScopeName(cmd) != "" {
+		s, err := openStore()
+		if err != nil {
+			return nil, err
+		}
+		return []namedStore{{Name: "", Store: s}}, nil
+	}
+	return allStores()
 }
 
 // readChat renderiza los últimos mensajes de conversación de un chat.

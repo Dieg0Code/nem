@@ -59,3 +59,25 @@ func TestFuse_Empty(t *testing.T) {
 		t.Errorf("empty: got %v, want nil", got)
 	}
 }
+
+func TestFuse_PreservesStoreID(t *testing.T) {
+	// La lectura federada estampa StoreID por origen; Fuse debe preservarlo en cada
+	// resultado para que el listado pueda etiquetar de dónde vino.
+	personal := Item{Kind: "message", ID: "p1", StoreID: ""}
+	team := Item{Kind: "message", ID: "t1", StoreID: "acme"}
+	got := Fuse([]Channel{
+		{Name: "store:", Items: []Item{personal}},
+		{Name: "store:acme", Items: []Item{team}},
+	}, 0, WithRecencyWeight(0))
+
+	byID := map[string]string{}
+	for _, r := range got {
+		byID[r.ID] = r.StoreID
+	}
+	if byID["p1"] != "" {
+		t.Errorf("p1 StoreID = %q, want personal (empty)", byID["p1"])
+	}
+	if byID["t1"] != "acme" {
+		t.Errorf("t1 StoreID = %q, want acme", byID["t1"])
+	}
+}

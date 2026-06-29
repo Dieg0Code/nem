@@ -26,13 +26,15 @@ func newSearchCmd() *cobra.Command {
 		role   string
 		mode   string
 		expand bool
+		team   string
+		local  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "search <query>",
 		Short: "Search memory (hybrid: messages + index tree, BM25/RRF)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSearch(cmd, args[0], top, format, role, mode, expand)
+			return runSearch(cmd, args[0], top, format, role, mode, expand, team, local)
 		},
 	}
 	cmd.Flags().IntVar(&top, "top", 10, "number of results")
@@ -40,37 +42,57 @@ func newSearchCmd() *cobra.Command {
 	cmd.Flags().StringVar(&role, "role", "", "message roles to include (default: conversation + reasoning; 'all' includes tool)")
 	cmd.Flags().StringVar(&mode, "mode", "hybrid", "hybrid | keyword | semantic")
 	cmd.Flags().BoolVar(&expand, "expand", true, "expand recall via relevance feedback (PRF); ignored in --mode keyword")
+	cmd.Flags().StringVar(&team, "team", "", "search only this team store (default: personal + all teams)")
+	cmd.Flags().BoolVar(&local, "local", false, "search only the personal store")
 	return cmd
 }
 
-func runSearch(cmd *cobra.Command, query string, top int, format, role, mode string, expand bool) error {
-	store, err := openStore()
-	if err != nil {
-		return err
-	}
-	defer store.Close()
-
+func runSearch(cmd *cobra.Command, query string, top int, format, role, mode string, expand bool, team string, local bool) error {
 	roles, err := resolveRoles(role)
 	if err != nil {
 		return err
 	}
-	allowed, scoped, err := resolveScope(cmd, store)
+
+	stores, err := searchStores(cmd, team, local)
 	if err != nil {
 		return err
 	}
+	defer closeStores(stores)
 
-	results, err := retrieve.Search(store, retrieve.Params{
-		Query: query, Top: top, Roles: roles, Allowed: allowed, Mode: mode, Expand: expand,
-	})
-	if err != nil {
-		return err
-	}
+	// Lectura federada: corre el search por cada store, estampa el origen y fusiona
+	// los rankings por-store en uno solo (RRF re-rankea cross-store).
+	scopeName := activeScopeName(cmd)
+	channels := make([]retrieve.Channel, 0, len(stores))
+	for _, ns := range stores {
+		var allowed []string
+		if ns.Name == "" && scopeName != "" {
+			a, _, err := resolveScope(cmd, ns.Store)
+			if err != nil {
+				return err
+			}
+			allowed = a
+		}
+		res, err := retrieve.Search(ns.Store, retrieve.Params{
+			Query: query, Top: top, Roles: roles, Allowed: allowed, Mode: mode, Expand: expand,
+		})
+		if err != nil {
+			return err
+		}
+		items := make([]retrieve.Item, len(res))
+		for i, r := range res {
+			it := r.Item
+			it.StoreID = ns.Name
+			items[i] = it
+		}
+		channels = append(channels, retrieve.Channel{Name: "store:" + ns.Name, Items: items})
 
-	// Señal "aprendida" del peso de los facts: si la query matchea facts, súbeles
-	// el uso (best-effort; conjunto chico, sin tocar FTS). Global → solo sin scope.
-	if !scoped {
-		recordFactHits(store, query)
+		// Señal "aprendida" del peso de los facts: solo en el personal y sin scope.
+		// Nunca se escribe en stores de equipo durante una lectura.
+		if ns.Name == "" && scopeName == "" {
+			recordFactHits(ns.Store, query)
+		}
 	}
+	results := retrieve.Fuse(channels, top)
 
 	out := cmd.OutOrStdout()
 	if len(results) == 0 {
@@ -89,14 +111,45 @@ func runSearch(cmd *cobra.Command, query string, top int, format, role, mode str
 		}
 		switch r.Kind {
 		case "node":
-			fmt.Fprintf(out, "%d. [index:%s · %s]  %s\n", i+1, r.NodeKind, title, r.ID)
+			fmt.Fprintf(out, "%d. [%s · index:%s · %s]  %s\n", i+1, originTag(r.StoreID), r.NodeKind, title, r.ID)
 			fmt.Fprintf(out, "   %s\n\n", snippet(r.Content))
 		default: // message
-			fmt.Fprintf(out, "%d. [%s · %s]  msg:%s\n", i+1, r.Source, title, r.ID)
+			fmt.Fprintf(out, "%d. [%s · %s · %s]  msg:%s\n", i+1, originTag(r.StoreID), r.Source, title, r.ID)
 			fmt.Fprintf(out, "   %s: %s\n\n", r.Role, snippet(r.Content))
 		}
 	}
 	return nil
+}
+
+// searchStores resuelve los stores sobre los que corre el search según los flags:
+// --team acota a un team; --local o un --scope activo acotan al personal; por
+// defecto, personal + todos los teams (lectura federada). El llamador cierra los
+// stores con closeStores.
+func searchStores(cmd *cobra.Command, team string, local bool) ([]namedStore, error) {
+	if team != "" {
+		s, err := openStoreFor(team)
+		if err != nil {
+			return nil, err
+		}
+		return []namedStore{{Name: team, Store: s}}, nil
+	}
+	// Un scope activo referencia chat ids del store personal: federar no aplica.
+	if local || activeScopeName(cmd) != "" {
+		s, err := openStore()
+		if err != nil {
+			return nil, err
+		}
+		return []namedStore{{Name: "", Store: s}}, nil
+	}
+	return allStores()
+}
+
+// originTag etiqueta el origen de un resultado para mostrar: "" → "personal".
+func originTag(storeID string) string {
+	if storeID == "" {
+		return "personal"
+	}
+	return "team:" + storeID
 }
 
 func renderSearchJSON(cmd *cobra.Command, query string, results []retrieve.Scored) error {
@@ -105,6 +158,7 @@ func renderSearchJSON(cmd *cobra.Command, query string, results []retrieve.Score
 		ID       string  `json:"id"`
 		ChatID   string  `json:"chat_id,omitempty"`
 		Title    string  `json:"title"`
+		Store    string  `json:"store"`
 		Source   string  `json:"source,omitempty"`
 		Role     string  `json:"role,omitempty"`
 		NodeKind string  `json:"node_kind,omitempty"`
@@ -114,7 +168,7 @@ func renderSearchJSON(cmd *cobra.Command, query string, results []retrieve.Score
 	out := make([]jsonHit, 0, len(results))
 	for _, r := range results {
 		out = append(out, jsonHit{
-			Kind: r.Kind, ID: r.ID, ChatID: r.ChatID, Title: r.Title, Source: r.Source,
+			Kind: r.Kind, ID: r.ID, ChatID: r.ChatID, Title: r.Title, Store: originTag(r.StoreID), Source: r.Source,
 			Role: r.Role, NodeKind: r.NodeKind, Content: r.Content, Score: r.Score,
 		})
 	}

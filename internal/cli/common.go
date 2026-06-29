@@ -13,21 +13,117 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// openStore abre el Store local de nem. Falla con un mensaje claro si nem no fue
-// inicializado todavía.
+// openStore abre el Store personal de nem. Falla con un mensaje claro si nem no
+// fue inicializado todavía.
 func openStore() (db.Store, error) {
 	dbPath, err := config.DBPath()
 	if err != nil {
 		return nil, err
 	}
+	store, err := openStoreAt(dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("nem is not initialized on this machine; run 'nem init' first")
+	}
+	return store, nil
+}
+
+// openStoreAt abre el Store SQLite en dbPath. Devuelve un error si el archivo no
+// existe (no crea stores implícitamente).
+func openStoreAt(dbPath string) (db.Store, error) {
 	if _, err := os.Stat(dbPath); errors.Is(err, os.ErrNotExist) {
-		return nil, errors.New("nem is not initialized on this machine; run 'nem init' first")
+		return nil, fmt.Errorf("no nem store at %s", dbPath)
 	}
 	store, err := db.New(db.WithPath(dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open nem store: %w", err)
 	}
 	return store, nil
+}
+
+// openStoreFor abre el Store personal (team=="") o el de un team registrado.
+func openStoreFor(team string) (db.Store, error) {
+	if team == "" {
+		return openStore()
+	}
+	if _, ok, err := config.GetTeam(team); err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, fmt.Errorf("unknown team %q (run 'nem team add %s <url>' first)", team, team)
+	}
+	dbPath, err := config.TeamDBPath(team)
+	if err != nil {
+		return nil, err
+	}
+	store, err := openStoreAt(dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("team %q is registered but not cloned (run 'nem team add %s <url>'): %w", team, team, err)
+	}
+	return store, nil
+}
+
+// namedStore empareja un Store con el nombre de su origen ("" = personal).
+type namedStore struct {
+	Name  string
+	Store db.Store
+}
+
+// allStores abre el store personal y cada team registrado y presente en disco.
+// El llamador es responsable de cerrar cada Store. Los teams registrados pero no
+// clonados se omiten silenciosamente (no rompen la lectura federada).
+func allStores() ([]namedStore, error) {
+	personal, err := openStore()
+	if err != nil {
+		return nil, err
+	}
+	teams, err := openTeamStores()
+	if err != nil {
+		personal.Close()
+		return nil, err
+	}
+	return append([]namedStore{{Name: "", Store: personal}}, teams...), nil
+}
+
+// openTeamStores abre cada team registrado y presente en disco, en orden estable
+// por nombre. Los teams registrados pero no clonados se omiten silenciosamente.
+// El llamador cierra cada Store (closeStores).
+func openTeamStores() ([]namedStore, error) {
+	teams, err := config.Teams()
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(teams))
+	for name := range teams {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+
+	stores := make([]namedStore, 0, len(names))
+	for _, name := range names {
+		dbPath, err := config.TeamDBPath(name)
+		if err != nil {
+			closeStores(stores)
+			return nil, err
+		}
+		if _, err := os.Stat(dbPath); errors.Is(err, os.ErrNotExist) {
+			continue // registrado pero no clonado: se omite en silencio
+		}
+		// Un nem.db que existe pero no abre (corrupto, permisos, schema) NO se
+		// omite en silencio: ocultarlo daría memoria de equipo incompleta sin avisar.
+		store, err := db.New(db.WithPath(dbPath))
+		if err != nil {
+			closeStores(stores)
+			return nil, fmt.Errorf("failed to open team store %q (%s): %w", name, dbPath, err)
+		}
+		stores = append(stores, namedStore{Name: name, Store: store})
+	}
+	return stores, nil
+}
+
+// closeStores cierra todos los stores abiertos por allStores.
+func closeStores(stores []namedStore) {
+	for _, s := range stores {
+		s.Store.Close()
+	}
 }
 
 // resolveActiveChat resuelve el chat sobre el que operan los comandos: el flag

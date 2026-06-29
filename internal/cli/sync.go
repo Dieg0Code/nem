@@ -52,6 +52,9 @@ func runSync(cmd *cobra.Command) error {
 		fmt.Fprintln(out, "local commit (no remote; use 'nem remote add origin <url>')")
 	}
 	fmt.Fprintf(out, "imported %d new commits\n", rep.Imported)
+	if rep.FactsExported > 0 || rep.FactsImported > 0 {
+		fmt.Fprintf(out, "facts: %d exported, %d merged\n", rep.FactsExported, rep.FactsImported)
+	}
 	return nil
 }
 

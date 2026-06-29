@@ -67,10 +67,7 @@ func runOutline(cmd *cobra.Command, _ string, start string, depth int) error {
 		printFacts(cmd, store)
 	}
 
-	var roots []db.Node
-	if start == "" {
-		roots, err = store.RootNodes()
-	} else {
+	if start != "" {
 		n, e := store.GetNode(start)
 		if e != nil {
 			return e
@@ -78,18 +75,56 @@ func runOutline(cmd *cobra.Command, _ string, start string, depth int) error {
 		if n == nil {
 			return fmt.Errorf("node %q not found (run 'nem index' first?)", start)
 		}
-		roots = []db.Node{*n}
+		printNode(cmd, store, *n, 0, depth, allowed, scoped)
+		return nil
 	}
+
+	roots, err := store.RootNodes()
 	if err != nil {
 		return err
 	}
 	if len(roots) == 0 {
 		fmt.Fprintln(out, "empty index — run 'nem index' to build the tree")
-		return nil
 	}
-
 	for _, r := range roots {
 		printNode(cmd, store, r, 0, depth, allowed, scoped)
+	}
+
+	// Lectura federada: la memoria del equipo va en secciones aparte, etiquetadas,
+	// para no fundir presupuestos ni árboles. Solo en la raíz y sin scope (los
+	// scopes referencian chats del store personal).
+	if !scoped {
+		if err := printTeamOutlines(cmd, depth); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// printTeamOutlines imprime, por cada team store clonado, una sección con sus
+// facts y su árbol de índice. Etiqueta cada bloque con "## Team <name>".
+func printTeamOutlines(cmd *cobra.Command, depth int) error {
+	teams, err := openTeamStores()
+	if err != nil {
+		return err
+	}
+	defer closeStores(teams)
+
+	out := cmd.OutOrStdout()
+	for _, ts := range teams {
+		fmt.Fprintf(out, "\n## Team %s\n\n", ts.Name)
+		printFacts(cmd, ts.Store)
+		roots, err := ts.Store.RootNodes()
+		if err != nil {
+			return err
+		}
+		if len(roots) == 0 {
+			fmt.Fprintln(out, "empty index (run 'nem index' after 'nem team sync')")
+			continue
+		}
+		for _, r := range roots {
+			printNode(cmd, ts.Store, r, 0, depth, nil, false)
+		}
 	}
 	return nil
 }

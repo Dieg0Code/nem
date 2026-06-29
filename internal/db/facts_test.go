@@ -119,3 +119,46 @@ func TestFacts_Delete(t *testing.T) {
 		t.Error("DeleteFact(missing) = nil error, want error")
 	}
 }
+
+// TestUpsertFact cubre el merge de facts en sync: inserta si no existe, y aplica
+// last-writer-wins por UpdatedAt cuando ya existe.
+func TestUpsertFact(t *testing.T) {
+	s := newTestStore(t)
+
+	// Inserta cuando no existe.
+	if err := s.UpsertFact(&Fact{ID: "f1", Content: "v1", Kind: "note", CreatedAt: 100, UpdatedAt: 100}); err != nil {
+		t.Fatalf("UpsertFact insert: %v", err)
+	}
+	got, _ := s.GetFact("f1")
+	if got == nil || got.Content != "v1" {
+		t.Fatalf("after insert = %+v, want content v1", got)
+	}
+
+	// Entrante más nuevo gana (LWW), incluido el rastro superseded.
+	if err := s.UpsertFact(&Fact{ID: "f1", Content: "v2", Kind: "note", CreatedAt: 100, UpdatedAt: 200, Superseded: true}); err != nil {
+		t.Fatalf("UpsertFact newer: %v", err)
+	}
+	got, _ = s.GetFact("f1")
+	if got.Content != "v2" || !got.Superseded {
+		t.Errorf("after newer upsert = %+v, want content v2 + superseded", got)
+	}
+
+	// Entrante más viejo se ignora (el existente se conserva).
+	if err := s.UpsertFact(&Fact{ID: "f1", Content: "stale", Kind: "note", CreatedAt: 100, UpdatedAt: 150}); err != nil {
+		t.Fatalf("UpsertFact older: %v", err)
+	}
+	got, _ = s.GetFact("f1")
+	if got.Content != "v2" {
+		t.Errorf("older upsert overwrote: content = %q, want v2", got.Content)
+	}
+
+	// Empate de UpdatedAt NO pisa: es el guard contra que el re-import del propio
+	// export redactado clobberee el contenido local en claro.
+	if err := s.UpsertFact(&Fact{ID: "f1", Content: "REDACTED", Kind: "note", CreatedAt: 100, UpdatedAt: 200}); err != nil {
+		t.Fatalf("UpsertFact equal: %v", err)
+	}
+	got, _ = s.GetFact("f1")
+	if got.Content != "v2" {
+		t.Errorf("equal-timestamp upsert overwrote: content = %q, want v2", got.Content)
+	}
+}

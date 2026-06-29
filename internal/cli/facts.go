@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Dieg0Code/nem/internal/config"
 	"github.com/Dieg0Code/nem/internal/db"
 	"github.com/Dieg0Code/nem/internal/facts"
 	"github.com/Dieg0Code/nem/internal/when"
@@ -38,6 +39,7 @@ func newFactAddCmd() *cobra.Command {
 		anchor     string
 		stability  string
 		pin        bool
+		team       string
 	)
 	cmd := &cobra.Command{
 		Use:   "add <text>",
@@ -48,7 +50,7 @@ func newFactAddCmd() *cobra.Command {
 			if text == "" {
 				return errors.New("fact text is required")
 			}
-			return runFactAdd(cmd, text, factAddOpts{supersedes, kind, due, anchor, stability, pin})
+			return runFactAdd(cmd, text, factAddOpts{supersedes, kind, due, anchor, stability, pin, team})
 		},
 	}
 	cmd.Flags().StringVar(&supersedes, "supersedes", "", "id of a fact this one replaces (kept as trail, not deleted)")
@@ -57,6 +59,7 @@ func newFactAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&anchor, "anchor", "", "invariant date for a derived fact; use {age}/{elapsed} in the text (e.g. --anchor 1995-07-20)")
 	cmd.Flags().StringVar(&stability, "stability", "", "override the inferred layer: core | stable | volatile")
 	cmd.Flags().BoolVar(&pin, "pin", false, "pin this fact: always shown, never collapsed by the budget")
+	cmd.Flags().StringVar(&team, "team", "", "add the fact into a team store instead of personal")
 	return cmd
 }
 
@@ -64,6 +67,7 @@ func newFactAddCmd() *cobra.Command {
 type factAddOpts struct {
 	supersedes, kind, due, anchor, stability string
 	pin                                      bool
+	team                                     string
 }
 
 // errScopedFacts se devuelve cuando hay un scope activo: los facts son un tier
@@ -75,7 +79,7 @@ func runFactAdd(cmd *cobra.Command, text string, opts factAddOpts) error {
 	if activeScopeName(cmd) != "" {
 		return errScopedFacts
 	}
-	store, err := openStore()
+	store, err := openStoreFor(opts.team)
 	if err != nil {
 		return err
 	}
@@ -95,6 +99,7 @@ func runFactAdd(cmd *cobra.Command, text string, opts factAddOpts) error {
 		Content:   text,
 		Kind:      strings.TrimSpace(opts.kind),
 		Source:    source,
+		Author:    config.UserName(),
 		CreatedAt: ts,
 		UpdatedAt: ts,
 		Pinned:    opts.pin,
@@ -152,30 +157,38 @@ func runFactAdd(cmd *cobra.Command, text string, opts factAddOpts) error {
 		}
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "fact saved (%s)\n", shortHash(f.ID))
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "fact saved (%s) → %s\n", shortHash(f.ID), originTag(opts.team))
+	if opts.team != "" {
+		fmt.Fprintf(out, "run 'nem team sync %s' to publish it\n", opts.team)
+	}
 	return nil
 }
 
-// newFactListCmd: `nem fact list [--all]`.
+// newFactListCmd: `nem fact list [--all] [--team <name>]`.
 func newFactListCmd() *cobra.Command {
-	var all bool
+	var (
+		all  bool
+		team string
+	)
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List durable facts (vigentes by default; --all includes superseded)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runFactList(cmd, all)
+			return runFactList(cmd, all, team)
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "include superseded facts (the trail)")
+	cmd.Flags().StringVar(&team, "team", "", "list facts from a team store instead of personal")
 	return cmd
 }
 
-func runFactList(cmd *cobra.Command, all bool) error {
+func runFactList(cmd *cobra.Command, all bool, team string) error {
 	if activeScopeName(cmd) != "" {
 		return errScopedFacts
 	}
-	store, err := openStore()
+	store, err := openStoreFor(team)
 	if err != nil {
 		return err
 	}
@@ -208,29 +221,36 @@ func runFactList(cmd *cobra.Command, all bool) error {
 		if f.Pinned {
 			layer += " · pinned"
 		}
-		fmt.Fprintf(out, "- %s  [%s · %s · %s]%s\n  %s\n", shortHash(f.ID), f.Kind, f.Source, layer, mark, facts.Render(f, nowUnix))
+		who := f.Source
+		if f.Author != "" {
+			who += " · by " + f.Author
+		}
+		fmt.Fprintf(out, "- %s  [%s · %s · %s]%s\n  %s\n", shortHash(f.ID), f.Kind, who, layer, mark, facts.Render(f, nowUnix))
 	}
 	return nil
 }
 
-// newFactDoneCmd: `nem fact done <id>` marca un recordatorio como completado.
+// newFactDoneCmd: `nem fact done <id> [--team <name>]` marca un recordatorio como
+// completado.
 func newFactDoneCmd() *cobra.Command {
+	var team string
 	cmd := &cobra.Command{
 		Use:   "done <id>",
 		Short: "Mark a reminder as completed (kept as trail; stops surfacing)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runFactDone(cmd, args[0])
+			return runFactDone(cmd, args[0], team)
 		},
 	}
+	cmd.Flags().StringVar(&team, "team", "", "operate on a team store instead of personal")
 	return cmd
 }
 
-func runFactDone(cmd *cobra.Command, id string) error {
+func runFactDone(cmd *cobra.Command, id, team string) error {
 	if activeScopeName(cmd) != "" {
 		return errScopedFacts
 	}
-	store, err := openStore()
+	store, err := openStoreFor(team)
 	if err != nil {
 		return err
 	}
@@ -247,24 +267,27 @@ func runFactDone(cmd *cobra.Command, id string) error {
 	return nil
 }
 
-// newFactRmCmd: `nem fact rm <id>` (borra de raíz; para corregir errores).
+// newFactRmCmd: `nem fact rm <id> [--team <name>]` (borra de raíz; para corregir
+// errores).
 func newFactRmCmd() *cobra.Command {
+	var team string
 	cmd := &cobra.Command{
 		Use:   "rm <id>",
 		Short: "Delete a fact outright (to fix a mistake; to update, use add --supersedes)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runFactRm(cmd, args[0])
+			return runFactRm(cmd, args[0], team)
 		},
 	}
+	cmd.Flags().StringVar(&team, "team", "", "operate on a team store instead of personal")
 	return cmd
 }
 
-func runFactRm(cmd *cobra.Command, id string) error {
+func runFactRm(cmd *cobra.Command, id, team string) error {
 	if activeScopeName(cmd) != "" {
 		return errScopedFacts
 	}
-	store, err := openStore()
+	store, err := openStoreFor(team)
 	if err != nil {
 		return err
 	}
@@ -290,21 +313,24 @@ func newFactPinCmd(pin bool) *cobra.Command {
 	if pin {
 		use, short = "pin <id>", "Pin a fact so it's always shown (never collapsed by the budget)"
 	}
-	return &cobra.Command{
+	var team string
+	cmd := &cobra.Command{
 		Use:   use,
 		Short: short,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runFactPin(cmd, args[0], pin)
+			return runFactPin(cmd, args[0], pin, team)
 		},
 	}
+	cmd.Flags().StringVar(&team, "team", "", "operate on a team store instead of personal")
+	return cmd
 }
 
-func runFactPin(cmd *cobra.Command, id string, pin bool) error {
+func runFactPin(cmd *cobra.Command, id string, pin bool, team string) error {
 	if activeScopeName(cmd) != "" {
 		return errScopedFacts
 	}
-	store, err := openStore()
+	store, err := openStoreFor(team)
 	if err != nil {
 		return err
 	}

@@ -99,6 +99,9 @@ type Store interface {
 	// --- facts (memoria semántica: tier privilegiado, siempre cargado) ---
 	// AddFact persiste una afirmación durable (el llamador fija id/timestamps).
 	AddFact(f *Fact) error
+	// UpsertFact inserta un fact, o lo reemplaza si ya existe y el entrante es más
+	// nuevo (UpdatedAt mayor o igual). Es el merge de facts entre máquinas en sync.
+	UpsertFact(f *Fact) error
 	// ListFacts devuelve las afirmaciones (newest first). includeInactive=false
 	// devuelve solo las vigentes (ni superseded ni done).
 	ListFacts(includeInactive bool) ([]Fact, error)

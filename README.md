@@ -118,24 +118,28 @@ facts. You stay in control of one thing: `nem sync` (sharing) is yours.
 
 ## Team memory
 
-A team store is just another nem store at `~/.nem/teams/<name>/` with its own
-git remote — a **common memory base** a whole team (humans *and* their agents)
-pushes curated commits and facts to, so work isn't duplicated. Your personal
-`~/.nem` stays private: nothing reaches the team unless you commit it there.
+A team store is just another nem store — at `~/.nem/teams/<name>/`, with its own
+git remote — that a whole team (humans *and* their agents) treats as one shared
+memory. Your personal `~/.nem` stays private; nothing reaches the team unless you
+commit it there, so the shared base stays **curated, not a dump**.
+
+Everyone points at the same remote and works from their own machine:
 
 ```bash
-nem team add acme git@github.com:acme/nem-memory.git   # clone a shared store
-nem commit --team acme -m "decided: auth via JWT"      # curate into the team
-nem fact add --team acme "we deploy on Fridays"        # a shared durable fact
-nem team sync acme                                     # publish (redacts secrets)
+nem config set user.name "Ana"                         # so shared work is attributed
+nem team add acme git@github.com:acme/nem-memory.git   # clone the shared store
+
+nem commit --team acme -m "decided: auth via JWT"      # publish a decision…
+nem fact add  --team acme "we deploy on Fridays"       # …or a durable team fact
+nem team sync acme                                     # push + pull (redacts secrets)
 ```
 
 Reads are **federated by default**: `nem search` and `nem outline` span your
 personal store *plus* every team, tagging each hit by origin (`[team:acme]`) and
-its author — so before starting, an agent sees *"Ana already resolved this"*.
-Scope it with `--team <name>` or `--local`. Commits are content-addressed, so the
-same work committed by two people de-dups by hash; shared facts merge by
-last-writer-wins (retire them with `--supersedes`/`fact done`, which propagate).
+author — so before starting, an agent sees *"Ana already resolved this"* instead of
+redoing it. Narrow with `--team <name>` / `--local`. Commits de-dup by content
+hash; shared facts merge last-writer-wins — retire one with `--supersedes` or
+`fact done` (both propagate), not a hard delete.
 
 ## Optional: the semantic layer
 

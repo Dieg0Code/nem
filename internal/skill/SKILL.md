@@ -28,8 +28,9 @@ token-bounded by design; navigate by meaning, don't dump.
 - **`nem read <HEAD|hash|chat:id|commit:hash>`** — the frozen, immutable snapshot.
   Read it before proposing anything, so you don't redo work or contradict a past
   decision.
-- **`nem status` · `nem timeline <project|chatID>` · `nem log`** — session state ·
-  how a decision evolved · the commit list.
+- **`nem status` · `nem timeline <project|chatID>` · `nem log`** — session state
+  (including uncommitted messages and nearby parallel sessions) · how a decision
+  evolved · the commit list.
 
 The tree is built by `nem index` (incremental and cheap). If `outline` looks stale
 or your fresh commits aren't in it, run `nem index`. If a node's summary is wrong,
@@ -63,13 +64,21 @@ Keep only high-signal context: decisions and their rationale, edge-cases and how
 they're handled, agreed conventions, non-obvious fixes. Not in-progress
 exploration, log dumps, or code that already lives in the repo.
 
+Default path: **`nem close -m "<the decision, imperative>"`**. It ingests fresh
+agent logs, commits the contiguous new messages since HEAD, and refreshes the
+index. Use it when you are ending a coherent thread or recovering after another
+agent ran in parallel.
+
+Manual path for curated snapshots:
+
 1. Stage: `nem add -L <n>` (last N messages) or `nem add --from <id> --to <id>`.
 2. Commit: `nem commit -m "<the decision, imperative>"` — describe the DECISION,
    not the activity, e.g. `"store JSONL per commit; keep the binary DB out of git"`.
 
 `--role` controls which message roles you stage (`user,assistant,reasoning` by
 default; `all` adds noisy tool output). With `-L`, the count applies after the role
-filter.
+filter. `nem close` refuses to run if manual staging already exists, so it never
+silently folds curated staged messages into an automatic close.
 
 ## Team memory — shared context
 

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -16,7 +17,7 @@ import (
 // Session identifica una sesión de agente detectada.
 type Session struct {
 	ChatID  string
-	Source  string // "codex" | "claude"
+	Source  string // "codex" | "claude" | "antigravity"
 	Path    string
 	ModTime time.Time
 }
@@ -28,8 +29,9 @@ type Detector interface {
 }
 
 type config struct {
-	codexRoot  string
-	claudeRoot string
+	codexRoot       string
+	claudeRoot      string
+	antigravityRoot string
 }
 
 // Option configura el Detector.
@@ -57,9 +59,22 @@ func WithClaudeRoot(root string) Option {
 	}
 }
 
+// WithAntigravityRoot fuerza el root de sesiones de Antigravity (default
+// ~/.gemini/antigravity-cli/brain).
+func WithAntigravityRoot(root string) Option {
+	return func(c *config) error {
+		if root == "" {
+			return errors.New("antigravity root cannot be empty")
+		}
+		c.antigravityRoot = root
+		return nil
+	}
+}
+
 type detector struct {
-	codexRoot  string
-	claudeRoot string
+	codexRoot       string
+	claudeRoot      string
+	antigravityRoot string
 }
 
 // NewDetector crea un Detector. Por defecto usa ~/.codex/sessions y
@@ -81,7 +96,10 @@ func NewDetector(options ...Option) (Detector, error) {
 	if cfg.claudeRoot == "" {
 		cfg.claudeRoot = filepath.Join(home, ".claude", "projects")
 	}
-	return &detector{codexRoot: cfg.codexRoot, claudeRoot: cfg.claudeRoot}, nil
+	if cfg.antigravityRoot == "" {
+		cfg.antigravityRoot = filepath.Join(home, ".gemini", "antigravity-cli", "brain")
+	}
+	return &detector{codexRoot: cfg.codexRoot, claudeRoot: cfg.claudeRoot, antigravityRoot: cfg.antigravityRoot}, nil
 }
 
 var uuidRE = regexp.MustCompile(`([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})`)
@@ -115,6 +133,7 @@ func (d *detector) Detect() (*Session, error) {
 
 	codex := newest(d.codexRoot)
 	claude := newest(d.claudeRoot)
+	antigravity := newestAntigravity(d.antigravityRoot)
 
 	var best *fileHit
 	var source string
@@ -123,6 +142,9 @@ func (d *detector) Detect() (*Session, error) {
 	}
 	if claude != nil && (best == nil || claude.modTime.After(best.modTime)) {
 		best, source = claude, "claude"
+	}
+	if antigravity != nil && (best == nil || antigravity.modTime.After(best.modTime)) {
+		best, source = antigravity, "antigravity"
 	}
 	if best == nil {
 		return nil, nil
@@ -134,6 +156,23 @@ func (d *detector) Detect() (*Session, error) {
 		Path:    best.path,
 		ModTime: best.modTime,
 	}, nil
+}
+
+// Recent devuelve sesiones modificadas dentro de window, ordenadas de más nueva
+// a más antigua. Se usa para advertir concurrencia operacional entre agentes.
+func Recent(window time.Duration, options ...Option) ([]Session, error) {
+	d, err := NewDetector(options...)
+	if err != nil {
+		return nil, err
+	}
+	dd := d.(*detector)
+	since := time.Now().Add(-window)
+	var out []Session
+	out = append(out, recentUnder(dd.codexRoot, "codex", since)...)
+	out = append(out, recentUnder(dd.claudeRoot, "claude", since)...)
+	out = append(out, recentUnder(dd.antigravityRoot, "antigravity", since)...)
+	sort.Slice(out, func(i, j int) bool { return out[i].ModTime.After(out[j].ModTime) })
+	return out, nil
 }
 
 type fileHit struct {
@@ -163,10 +202,64 @@ func newest(root string) *fileHit {
 	return best
 }
 
+func newestAntigravity(root string) *fileHit {
+	var best *fileHit
+	_ = filepath.WalkDir(root, func(path string, dirent fs.DirEntry, err error) error {
+		if err != nil || dirent.IsDir() {
+			return nil
+		}
+		if !strings.EqualFold(filepath.Base(path), "transcript.jsonl") {
+			return nil
+		}
+		info, err := dirent.Info()
+		if err != nil {
+			return nil
+		}
+		if best == nil || info.ModTime().After(best.modTime) {
+			best = &fileHit{path: path, modTime: info.ModTime()}
+		}
+		return nil
+	})
+	return best
+}
+
+func recentUnder(root, source string, since time.Time) []Session {
+	var out []Session
+	_ = filepath.WalkDir(root, func(path string, dirent fs.DirEntry, err error) error {
+		if err != nil || dirent.IsDir() {
+			return nil
+		}
+		if source == "antigravity" {
+			if !strings.EqualFold(filepath.Base(path), "transcript.jsonl") {
+				return nil
+			}
+		} else if !strings.EqualFold(filepath.Ext(path), ".jsonl") {
+			return nil
+		}
+		info, err := dirent.Info()
+		if err != nil || info.ModTime().Before(since) {
+			return nil
+		}
+		out = append(out, Session{
+			ChatID:  chatIDFromPath(path, source),
+			Source:  source,
+			Path:    path,
+			ModTime: info.ModTime(),
+		})
+		return nil
+	})
+	return out
+}
+
 // chatIDFromPath deriva el chat id del path del archivo, consistente con los
 // parsers: UUID del nombre para Codex; nombre sin extensión (sessionId) para
 // Claude.
 func chatIDFromPath(path, source string) string {
+	if source == "antigravity" {
+		dir := filepath.Dir(path)
+		dir = filepath.Dir(dir)
+		return filepath.Base(filepath.Dir(dir))
+	}
 	base := filepath.Base(path)
 	if source == "codex" {
 		if m := uuidRE.FindString(base); m != "" {

@@ -52,6 +52,27 @@ recall it next time and you can't search it; it just piles up and goes stale.
 navigable memory — recallable by you *and* by the agent. Nothing new to collect,
 nothing leaves your machine. It was already yours; nem just makes it usable.
 
+## Your context is the lock-in. Own it instead.
+
+Memory is how platforms keep you: whoever holds your context holds *you*, which
+is why every vendor wants to be the one that "knows you". nem inverts that —
+your memory is a git repo **you** own. Keep it in a private GitHub repo, read it,
+version it, take it anywhere. If nem vanished tomorrow, your data is still just
+git commits.
+
+And once the memory lives outside the agent, the agents become **interchangeable**.
+Claude Code, Codex and Antigravity read the same store, so none of them knows you
+better than the others — the repo knows you. That changes the math:
+
+- **Three entry-tier plans instead of one top-tier plan** (as of today, that's
+  3 × $20 vs $200). Same shared brain across all three, and three *separate*
+  rate-limit pools: when one agent caps out mid-afternoon, switch to the next
+  and keep going where you left off.
+- **No hosted memory service.** No platform, no per-call API bill, no dashboard
+  holding your data hostage — a single binary and a repo.
+- **Models rotate; your context doesn't.** New model, new agent, new vendor —
+  the memory survives every swap, because it never lived in any of them.
+
 ## Install
 
 ```powershell

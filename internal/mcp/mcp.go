@@ -244,6 +244,7 @@ func (h *handlers) search(ctx context.Context, _ *mcp.CallToolRequest, in search
 	expand := in.Expand == nil || *in.Expand // default true
 	results, err := retrieve.Search(h.store, retrieve.Params{
 		Query: in.Query, Top: in.Top, Roles: rolesFor(in.Role), Allowed: allowed, Mode: in.Mode, Expand: expand,
+		Learned: !scoped,
 	})
 	if err != nil {
 		return nil, none{}, err
@@ -255,6 +256,11 @@ func (h *handlers) search(ctx context.Context, _ *mcp.CallToolRequest, in search
 			if m := facts.MatchQuery(all, in.Query); len(m) > 0 {
 				_ = h.store.RecordFactHit(facts.IDs(m), time.Now().Unix())
 			}
+		}
+		// Log de la búsqueda servida, para correlacionar con el read que siga
+		// (pares query→read del ranking). Best-effort.
+		if served := retrieve.ServedNodeIDs(results); len(served) > 0 {
+			_ = h.store.LogSearch(uuid.NewString(), in.Query, served, time.Now().Unix())
 		}
 	}
 
@@ -315,6 +321,9 @@ func (h *handlers) read(ctx context.Context, _ *mcp.CallToolRequest, in readIn) 
 		if err != nil {
 			return nil, none{}, err
 		}
+		if !scoped {
+			retrieve.RecordRead(h.store, "chat:"+chatID, time.Now().Unix())
+		}
 		return textResult(s), none{}, nil
 	}
 
@@ -349,6 +358,9 @@ func (h *handlers) read(ctx context.Context, _ *mcp.CallToolRequest, in readIn) 
 	s, err := output.Render(doc, format)
 	if err != nil {
 		return nil, none{}, err
+	}
+	if !scoped {
+		retrieve.RecordRead(h.store, "commit:"+commit.Hash, time.Now().Unix())
 	}
 	return textResult(s), none{}, nil
 }

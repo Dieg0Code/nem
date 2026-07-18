@@ -10,6 +10,7 @@ import (
 	"github.com/Dieg0Code/nem/internal/facts"
 	"github.com/Dieg0Code/nem/internal/output"
 	"github.com/Dieg0Code/nem/internal/retrieve"
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 )
 
@@ -74,6 +75,7 @@ func runSearch(cmd *cobra.Command, query string, top int, format, role, mode str
 		}
 		res, err := retrieve.Search(ns.Store, retrieve.Params{
 			Query: query, Top: top, Roles: roles, Allowed: allowed, Mode: mode, Expand: expand,
+			Learned: ns.Name == "" && scopeName == "",
 		})
 		if err != nil {
 			return err
@@ -93,6 +95,19 @@ func runSearch(cmd *cobra.Command, query string, top int, format, role, mode str
 		}
 	}
 	results := retrieve.Fuse(channels, top)
+
+	// Log de la búsqueda servida (para correlacionar con el read que siga): solo
+	// el store personal y sin scope, igual que recordFactHits. Best-effort.
+	if scopeName == "" {
+		for _, ns := range stores {
+			if ns.Name == "" {
+				if served := retrieve.ServedNodeIDs(results); len(served) > 0 {
+					_ = ns.Store.LogSearch(uuid.NewString(), query, served, time.Now().Unix())
+				}
+				break
+			}
+		}
+	}
 
 	out := cmd.OutOrStdout()
 	if len(results) == 0 {

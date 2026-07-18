@@ -8,6 +8,7 @@ import (
 
 	"github.com/Dieg0Code/nem/internal/db"
 	"github.com/Dieg0Code/nem/internal/output"
+	"github.com/Dieg0Code/nem/internal/retrieve"
 	"github.com/spf13/cobra"
 )
 
@@ -76,6 +77,7 @@ func runRead(cmd *cobra.Command, chatFlag, ref, format, team string) error {
 	}
 
 	// El scope solo aplica al store personal (sus chat ids).
+	personalScoped := false
 	if owner.Name == "" {
 		allowed, scoped, err := resolveScope(cmd, owner.Store)
 		if err != nil {
@@ -84,8 +86,16 @@ func runRead(cmd *cobra.Command, chatFlag, ref, format, team string) error {
 		if scoped && !inScope(allowed, found.ChatID) {
 			return fmt.Errorf("commit %q not found in scope %q", ref, activeScopeName(cmd))
 		}
+		personalScoped = scoped
 	}
-	return renderCommit(cmd, owner.Store, found, originTag(owner.Name), format)
+	if err := renderCommit(cmd, owner.Store, found, originTag(owner.Name), format); err != nil {
+		return err
+	}
+	// Señal aprendida (par query→read): solo el store personal y sin scope.
+	if owner.Name == "" && !personalScoped {
+		retrieve.RecordRead(owner.Store, "commit:"+found.Hash, time.Now().Unix())
+	}
+	return nil
 }
 
 // runReadLocal maneja las refs atadas a la sesión (HEAD y chat:<id>) contra el
@@ -107,7 +117,13 @@ func runReadLocal(cmd *cobra.Command, chatFlag, ref, format string) error {
 		if scoped && !inScope(allowed, chatID) {
 			return fmt.Errorf("chat %q not found in scope %q", chatID, activeScopeName(cmd))
 		}
-		return readChat(cmd, store, chatID, format)
+		if err := readChat(cmd, store, chatID, format); err != nil {
+			return err
+		}
+		if !scoped {
+			retrieve.RecordRead(store, "chat:"+chatID, time.Now().Unix())
+		}
+		return nil
 	}
 
 	commit, err := resolveCommit(store, chatFlag, ref)
@@ -120,7 +136,13 @@ func runReadLocal(cmd *cobra.Command, chatFlag, ref, format string) error {
 	if scoped && !inScope(allowed, commit.ChatID) {
 		return fmt.Errorf("commit %q not found in scope %q", ref, activeScopeName(cmd))
 	}
-	return renderCommit(cmd, store, commit, "", format)
+	if err := renderCommit(cmd, store, commit, "", format); err != nil {
+		return err
+	}
+	if !scoped {
+		retrieve.RecordRead(store, "commit:"+commit.Hash, time.Now().Unix())
+	}
+	return nil
 }
 
 // renderCommit renderiza un commit resuelto, con su origen (vacío = sin etiqueta).

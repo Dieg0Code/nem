@@ -37,6 +37,18 @@ or your fresh commits aren't in it, run `nem index`. If a node's summary is wron
 rewrite it with `nem annotate <nodeID> -m "<better>"` — it's pinned and survives
 re-indexing.
 
+**Curation reflexes — every session leaves the store better than it found it:**
+
+- If a summary led you to read a commit that wasn't what it promised, fix it with
+  `nem annotate` **before moving on**. You just paid the cost of the bad
+  description; you're the best-placed agent that will ever see it.
+- If you discover a committed decision was later reversed, annotate the old node:
+  `nem annotate <nodeID> -m "SUPERSEDED by <new hash>: <what changed>"` — so
+  search stops sending future agents to dead decisions.
+- `search` → `read` pairs **train the ranking**: reading a result you found via
+  search teaches nem that this query leads there, and boosts it next time. So
+  search first, then read — it's not just recall, it sharpens the store.
+
 ## Two kinds of memory
 
 - **Commits — episodic.** What happened in a thread, retrieved by relevance.

@@ -3,6 +3,7 @@ package retrieve
 import (
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Dieg0Code/nem/internal/db"
 )
@@ -21,6 +22,7 @@ type Params struct {
 	Allowed []string // scope: chatIDs visibles (nil = sin filtro)
 	Mode    string   // "hybrid" (default) | "keyword" | "semantic"
 	Expand  bool     // activar PRF (expansión por relevancia)
+	Learned bool     // activar el canal aprendido (pares query→read; solo store personal)
 }
 
 // Search corre el pipeline completo de recuperación y devuelve los resultados ya
@@ -50,6 +52,14 @@ func Search(store db.Store, p Params) ([]Scored, error) {
 	// PRF solo en hybrid: keyword es exacto/predecible y semantic es vectores-only.
 	if p.Expand && p.Mode == "hybrid" {
 		channels = append(channels, prfChannels(store, p, base, fetch)...)
+	}
+	// Canal aprendido (pares query→read) solo en hybrid y NUNCA bajo scope: la
+	// señal es global al store personal y no sabe filtrar por chats permitidos,
+	// así que el guard vive acá y no depende de la disciplina de los llamadores.
+	if p.Learned && p.Mode == "hybrid" && len(p.Allowed) == 0 {
+		if lc := learnedChannel(store, p.Query, time.Now().Unix()); lc != nil {
+			channels = append(channels, *lc)
+		}
 	}
 	return Fuse(channels, top), nil
 }

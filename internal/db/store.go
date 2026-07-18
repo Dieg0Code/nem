@@ -118,6 +118,20 @@ type Store interface {
 	// DeleteFact borra una afirmación de raíz (corrección de errores).
 	DeleteFact(id string) error
 
+	// --- señal de uso (pares query→read que alimentan el ranking) ---
+	// LogSearch registra una búsqueda servida (para correlacionar con reads) y
+	// prunea entradas viejas.
+	LogSearch(id, query string, servedIDs []string, now int64) error
+	// RecentSearches devuelve las búsquedas desde `since`, más nueva primero.
+	RecentSearches(since int64) ([]SearchLog, error)
+	// RecordNodeTermHits suma uso a los pares (término, nodo) dados.
+	RecordNodeTermHits(terms []string, nodeID string, now int64) error
+	// ConsumeServedID marca un nodo de un SearchLog como ya atribuido (dedup).
+	ConsumeServedID(logID, nodeID string) error
+	// MatchNodeTerms devuelve nodos leídos tras búsquedas con estos términos,
+	// por hits agregados desc (excluye superseded).
+	MatchNodeTerms(terms []string, limit int) ([]NodeTermMatch, error)
+
 	// --- embeddings (capa opcional) ---
 	// ClearEmbeddings borra todos los vectores.
 	ClearEmbeddings() error

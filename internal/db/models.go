@@ -143,6 +143,28 @@ type Embedding struct {
 	Vec    []byte // float32 little-endian (ver internal/embed.Encode)
 }
 
+// SearchLog registra las búsquedas recientes para correlacionarlas con los reads
+// que siguen (pares query→read, la señal aprendida del ranking). Es efímera: se
+// prunea a 24h en cada escritura. Estado local derivado: NO se exporta en sync.
+type SearchLog struct {
+	ID        string `gorm:"primaryKey"`
+	Query     string
+	ServedIDs string // JSON []string: node IDs servidos ("commit:<hash>", "chat:<id>")
+	CreatedAt int64  `gorm:"index"`
+}
+
+// NodeTerm es una asociación aprendida término→nodo: cuántas veces un read del
+// nodo siguió a una búsqueda que contenía el término. Es el equivalente para
+// nodos del Hits/LastHit de Fact. El término se guarda ya normalizado (stem),
+// y la clave apunta a node IDs determinísticos ("commit:<hash>", "chat:<id>"),
+// así la señal sobrevive un rebuild completo del índice (ClearNodes).
+type NodeTerm struct {
+	Term    string `gorm:"primaryKey"`
+	NodeID  string `gorm:"primaryKey;index"`
+	Hits    int64
+	LastHit int64
+}
+
 // models devuelve todos los modelos para AutoMigrate.
 func models() []any {
 	return []any{
@@ -154,5 +176,7 @@ func models() []any {
 		&Fact{},
 		&Node{},
 		&Embedding{},
+		&SearchLog{},
+		&NodeTerm{},
 	}
 }

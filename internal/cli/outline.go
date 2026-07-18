@@ -65,6 +65,7 @@ func runOutline(cmd *cobra.Command, _ string, start string, depth int) error {
 	// probabilística. Solo en la vista raíz y sin scope (los facts son globales).
 	if start == "" && !scoped {
 		printFacts(cmd, store)
+		printRevisionHint(cmd, store)
 	}
 
 	if start != "" {
@@ -157,6 +158,19 @@ func printFacts(cmd *cobra.Command, store db.Store) {
 			fmt.Fprintf(out, "- [%s] %s  (fact:%s)\n", l.Due, l.Content, shortHash(l.ID))
 		}
 		fmt.Fprintln(out)
+	}
+}
+
+// printRevisionHint imprime el canario anti-cámara-de-eco: si el store es
+// maduro y hace mucho que ninguna decisión se revisa (supersede), se lo señala
+// al agente al tope del mapa. Best-effort y solo en el store personal.
+func printRevisionHint(cmd *cobra.Command, store db.Store) {
+	lastRev, since, err := store.RevisionHealth()
+	if err != nil {
+		return
+	}
+	if hint := facts.RevisionHint(lastRev, since, time.Now().Unix()); hint != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "%s\n\n", hint)
 	}
 }
 

@@ -162,6 +162,12 @@ func (h *handlers) outline(ctx context.Context, _ *mcp.CallToolRequest, in outli
 	// rutina) encabezan el mapa SIEMPRE. Solo en la vista raíz y sin scope.
 	if in.NodeID == "" && !scoped {
 		h.writeFacts(&b)
+		// Canario anti-cámara-de-eco: mismo hint que el CLI (best-effort).
+		if lastRev, since, err := h.store.RevisionHealth(); err == nil {
+			if hint := facts.RevisionHint(lastRev, since, time.Now().Unix()); hint != "" {
+				fmt.Fprintf(&b, "%s\n\n", hint)
+			}
+		}
 	}
 	if len(roots) == 0 {
 		b.WriteString("empty index — call nem_index first\n")

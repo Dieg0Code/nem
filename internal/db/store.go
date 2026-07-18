@@ -131,6 +131,9 @@ type Store interface {
 	// MatchNodeTerms devuelve nodos leídos tras búsquedas con estos términos,
 	// por hits agregados desc (excluye superseded).
 	MatchNodeTerms(terms []string, limit int) ([]NodeTermMatch, error)
+	// RevisionHealth devuelve el último supersede de facts y la edad del store
+	// (canario anti-cámara-de-eco; 0 = nunca / vacío).
+	RevisionHealth() (lastRevisionAt, storeSince int64, err error)
 
 	// --- embeddings (capa opcional) ---
 	// ClearEmbeddings borra todos los vectores.

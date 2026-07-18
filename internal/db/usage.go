@@ -72,6 +72,25 @@ func (s *store) RecordNodeTermHits(terms []string, nodeID string, now int64) err
 	return nil
 }
 
+// RevisionHealth devuelve las marcas para el canario anti-cámara-de-eco: la
+// última vez que se revisó una decisión (el supersede más reciente entre los
+// facts) y desde cuándo existe el store (el commit más antiguo). Ambos 0 si
+// nunca / no hay. La interpretación (cuándo advertir) vive en internal/facts.
+func (s *store) RevisionHealth() (lastRevisionAt, storeSince int64, err error) {
+	// COALESCE: MAX/MIN sobre cero filas devuelve NULL, no 0.
+	if err = s.gdb.Raw(
+		`SELECT COALESCE(MAX(updated_at), 0) FROM facts WHERE superseded = 1`,
+	).Scan(&lastRevisionAt).Error; err != nil {
+		return 0, 0, fmt.Errorf("failed to read revision health: %w", err)
+	}
+	if err = s.gdb.Raw(
+		`SELECT COALESCE(MIN(created_at), 0) FROM commits`,
+	).Scan(&storeSince).Error; err != nil {
+		return 0, 0, fmt.Errorf("failed to read store age: %w", err)
+	}
+	return lastRevisionAt, storeSince, nil
+}
+
 // ConsumeServedID saca un node ID del conjunto servido de un SearchLog: marca
 // el par (búsqueda, nodo) como ya atribuido, para que reads repetidos o queries
 // refinadas casi idénticas no inflen el contador (un log atribuye cada nodo UNA

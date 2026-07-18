@@ -6,6 +6,7 @@
 package facts
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"strconv"
@@ -143,6 +144,34 @@ func Render(f db.Fact, now int64) string {
 		c = strings.ReplaceAll(c, "{elapsed}", when.HumanizeSince(f.AnchorAt, now))
 	}
 	return c
+}
+
+// revisionWarnAfter es cuánto puede pasar sin que se revise NINGUNA decisión
+// antes de que el outline lo advierta. Una memoria que solo acumula y nunca
+// contradice es una cámara de eco; este es su canario.
+const revisionWarnAfter = int64(60 * 24 * 60 * 60) // 60 días
+
+// RevisionHint devuelve la advertencia anti-cámara-de-eco para el outline, o ""
+// si no corresponde. Advierte solo cuando el store es más viejo que el umbral
+// (a un store joven no se le puede pedir revisiones) y ningún fact ha sido
+// superseded dentro de la ventana. Es una pista para el agente, no un error:
+// recall sin crítica es eco.
+func RevisionHint(lastRevisionAt, storeSince, now int64) string {
+	if storeSince <= 0 || now-storeSince < revisionWarnAfter {
+		return "" // store vacío o demasiado joven para juzgarlo
+	}
+	if lastRevisionAt > 0 && now-lastRevisionAt < revisionWarnAfter {
+		return "" // hubo revisión reciente: memoria viva
+	}
+	span := "since this store began"
+	if lastRevisionAt > 0 {
+		span = fmt.Sprintf("in %dd", (now-lastRevisionAt)/86400)
+	}
+	return fmt.Sprintf(
+		"⚠ revision health: nothing superseded %s — recall isn't agreement. "+
+			"If a recalled decision no longer holds, challenge it: "+
+			"`nem fact add \"<new>\" --supersedes <id>` or `nem annotate <nodeID> -m \"SUPERSEDED by <hash>: ...\"`",
+		span)
 }
 
 // MatchQuery devuelve los facts cuyo contenido matchea algún término relevante

@@ -73,6 +73,53 @@ func TestRecordNodeTermHits_Upsert(t *testing.T) {
 	}
 }
 
+// TestRevisionHealth verifica las dos marcas del canario: el supersede más
+// reciente entre los facts y la edad del store (commit más antiguo), con 0
+// cuando no hay datos.
+func TestRevisionHealth(t *testing.T) {
+	s := usageStore(t)
+
+	lastRev, since, err := s.RevisionHealth()
+	if err != nil {
+		t.Fatalf("RevisionHealth empty: %v", err)
+	}
+	if lastRev != 0 || since != 0 {
+		t.Errorf("empty store should report zeros, got %d/%d", lastRev, since)
+	}
+
+	if err := s.UpsertChat(&Chat{ID: "c1", Title: "t", Source: "manual"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []Commit{
+		{Hash: "aaa", ChatID: "c1", CreatedAt: 500, Snapshot: "[]"},
+		{Hash: "bbb", ChatID: "c1", CreatedAt: 300, Snapshot: "[]"},
+	} {
+		if err := s.CreateCommit(&c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.AddFact(&Fact{ID: "f1", Content: "old", CreatedAt: 100, UpdatedAt: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddFact(&Fact{ID: "f2", Content: "new", CreatedAt: 200, UpdatedAt: 200}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SupersedeFact("f1", "f2", 900); err != nil {
+		t.Fatal(err)
+	}
+
+	lastRev, since, err = s.RevisionHealth()
+	if err != nil {
+		t.Fatalf("RevisionHealth: %v", err)
+	}
+	if lastRev != 900 {
+		t.Errorf("lastRevisionAt: want 900 (supersede time), got %d", lastRev)
+	}
+	if since != 300 {
+		t.Errorf("storeSince: want 300 (oldest commit), got %d", since)
+	}
+}
+
 // TestMatchNodeTerms_OrderAndLimit verifica el ORDER BY (hits desc) y el LIMIT
 // del query crudo: el nodo con más hits agregados sale primero y el corte deja
 // fuera al de menos uso.

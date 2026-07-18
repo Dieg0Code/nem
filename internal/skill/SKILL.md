@@ -69,12 +69,13 @@ re-indexing.
     `nem fact add "<new>" --supersedes <id>` (keeps the trail). `nem fact rm <id>`
     is only for fixing a mistaken entry.
   - **Facts are knowledge, NOT a task tracker.** Backlog items, TODOs and
-    feature ideas go to the project's issue tracker (`gh issue create`), not
-    `fact add` — stable facts compete for a small always-loaded budget, and a
-    task would burn a slot in every future session. A *known limitation* is a
-    fact; *"build the fix"* is an issue (link the issue from the fact if both
-    exist). Reminders (`--due`) are for time-boxed revisits like decision
-    reviews, not open-ended work.
+    feature ideas belong wherever the project already tracks work (its issue
+    tracker, a TODO file, a board — whatever exists), not in `fact add` —
+    stable facts compete for a small always-loaded budget, and a task would
+    burn a slot in every future session. A *known limitation* is a fact;
+    *"build the fix"* is a work item (link it from the fact if both exist).
+    Reminders (`--due`) are for time-boxed revisits like decision reviews,
+    not open-ended work.
 
 > Estimate from real history, not human-team units. `nem stats` and
 > `nem timeline <target>` record your **active time** (real work) vs **calendar

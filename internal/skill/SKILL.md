@@ -48,6 +48,10 @@ re-indexing.
 - `search` → `read` pairs **train the ranking**: reading a result you found via
   search teaches nem that this query leads there, and boosts it next time. So
   search first, then read — it's not just recall, it sharpens the store.
+- If `outline` shows the **revision-health warning** (nothing superseded in a
+  long time), treat it as an echo-chamber smell: this session, pick one recalled
+  decision and genuinely test it against current reality — supersede it if it no
+  longer holds, and tell the user you did. Recall without critique is just echo.
 
 ## Two kinds of memory
 
@@ -91,6 +95,30 @@ Manual path for curated snapshots:
 default; `all` adds noisy tool output). With `-L`, the count applies after the role
 filter. `nem close` refuses to run if manual staging already exists, so it never
 silently folds curated staged messages into an automatic close.
+
+## The decision journal — the loop that makes the human smarter
+
+Memory that only accumulates makes the user faster; memory that gets **confronted
+with outcomes** makes them better. Three reflexes close that loop, and none of
+them depends on anyone's good intentions — the structure does the work:
+
+1. **Decision → dated expectation.** When you persist a significant decision,
+   also record what it's expected to deliver, and schedule the confrontation:
+   `nem fact add "review <hash>: did <decision> actually <expected result>?" --due +30d`.
+   A decision without a falsifiable expectation is dogma; give it one.
+2. **Reminder fires → verdict recorded.** When a review reminder surfaces, don't
+   just `fact done` it — actually check how it turned out, and write the verdict
+   on the commit's node: `nem annotate <nodeID> -m "OUTCOME: worked / failed
+   because <reality>"`. Over time the store separates decisions that were
+   *validated*, *refuted*, or *never confronted* — that last bucket is the
+   user's self-deception meter; say so if it grows.
+3. **Dissent gets committed, not smoothed over.** If you recommended X, the user
+   chose Y, and the work proceeds — commit the disagreement as a recorded bet,
+   not a reproach: `nem commit -m "dissent: recommended X (<why>); user chose Y
+   (<their why>)"`. When the outcome lands (reflex 2), both sides get calibrated.
+   An empty dissent log after months of use means the agents are just agreeing —
+   sycophancy confirmed by data. Disagreeing for the record is a service, not a
+   conflict.
 
 ## Team memory — shared context
 

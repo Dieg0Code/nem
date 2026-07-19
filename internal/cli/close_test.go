@@ -47,9 +47,9 @@ func TestCloseCommitsAndIndexes(t *testing.T) {
 		{ID: "c1:2", Role: "assistant", Content: "release shipped", Timestamp: 1700000002, Seq: 2},
 	})
 
-	oldParsers := closeParsers
-	closeParsers = func() []ingest.Parser { return nil }
-	t.Cleanup(func() { closeParsers = oldParsers })
+	oldSources := closeSources
+	closeSources = func() ([]ingest.Source, error) { return nil, nil }
+	t.Cleanup(func() { closeSources = oldSources })
 
 	out := runCmd(t, func(cmd *cobra.Command) error {
 		return runClose(cmd, closeOpts{message: "close release", chatFlag: "c1", lastN: 2})
@@ -74,9 +74,9 @@ func TestCloseNoIndex(t *testing.T) {
 	t.Setenv("NEM_HOME", t.TempDir())
 	seedChatMessages(t, "c1", []db.Message{{ID: "c1:1", Role: "user", Content: "x", Timestamp: 1700000001, Seq: 1}})
 
-	oldParsers := closeParsers
-	closeParsers = func() []ingest.Parser { return nil }
-	t.Cleanup(func() { closeParsers = oldParsers })
+	oldSources := closeSources
+	closeSources = func() ([]ingest.Source, error) { return nil, nil }
+	t.Cleanup(func() { closeSources = oldSources })
 
 	_ = runCmd(t, func(cmd *cobra.Command) error {
 		return runClose(cmd, closeOpts{message: "close without index", chatFlag: "c1", lastN: 1, noIndex: true})
@@ -98,9 +98,9 @@ func TestCloseCommitsFullRangeWhenNoHead(t *testing.T) {
 	}
 	seedChatMessages(t, "c1", msgs)
 
-	oldParsers := closeParsers
-	closeParsers = func() []ingest.Parser { return nil }
-	t.Cleanup(func() { closeParsers = oldParsers })
+	oldSources := closeSources
+	closeSources = func() ([]ingest.Source, error) { return nil, nil }
+	t.Cleanup(func() { closeSources = oldSources })
 
 	_ = runCmd(t, func(cmd *cobra.Command) error {
 		return runClose(cmd, closeOpts{message: "close all", chatFlag: "c1"})
@@ -123,9 +123,9 @@ func TestCloseCommitsFullRangeWhenNoHead(t *testing.T) {
 func TestCloseRefusesWhenNoNewMessages(t *testing.T) {
 	t.Setenv("NEM_HOME", t.TempDir())
 	seedChatMessages(t, "c1", []db.Message{{ID: "c1:1", Role: "user", Content: "x", Timestamp: 1700000001, Seq: 1}})
-	oldParsers := closeParsers
-	closeParsers = func() []ingest.Parser { return nil }
-	t.Cleanup(func() { closeParsers = oldParsers })
+	oldSources := closeSources
+	closeSources = func() ([]ingest.Source, error) { return nil, nil }
+	t.Cleanup(func() { closeSources = oldSources })
 
 	_ = runCmd(t, func(cmd *cobra.Command) error {
 		return runClose(cmd, closeOpts{message: "first", chatFlag: "c1"})
@@ -138,9 +138,9 @@ func TestCloseRefusesWhenNoNewMessages(t *testing.T) {
 func TestCloseRefusesPreExistingStaging(t *testing.T) {
 	t.Setenv("NEM_HOME", t.TempDir())
 	seedPersonalStaged(t, "c1")
-	oldParsers := closeParsers
-	closeParsers = func() []ingest.Parser { return nil }
-	t.Cleanup(func() { closeParsers = oldParsers })
+	oldSources := closeSources
+	closeSources = func() ([]ingest.Source, error) { return nil, nil }
+	t.Cleanup(func() { closeSources = oldSources })
 
 	err := runClose(&cobra.Command{}, closeOpts{message: "close", chatFlag: "c1"})
 	if err == nil || !strings.Contains(err.Error(), "already has") {
@@ -154,9 +154,9 @@ func TestCloseLastIsGuardrail(t *testing.T) {
 		{ID: "c1:1", Role: "user", Content: "one", Timestamp: 1700000001, Seq: 1},
 		{ID: "c1:2", Role: "user", Content: "two", Timestamp: 1700000002, Seq: 2},
 	})
-	oldParsers := closeParsers
-	closeParsers = func() []ingest.Parser { return nil }
-	t.Cleanup(func() { closeParsers = oldParsers })
+	oldSources := closeSources
+	closeSources = func() ([]ingest.Source, error) { return nil, nil }
+	t.Cleanup(func() { closeSources = oldSources })
 
 	err := runClose(&cobra.Command{}, closeOpts{message: "close", chatFlag: "c1", lastN: 1})
 	if err == nil || !strings.Contains(err.Error(), "refusing to close 2 new messages") {

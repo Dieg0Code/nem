@@ -34,17 +34,18 @@ recallable structure: **immutable commits**, a **navigable index tree**, and
 **durable facts** — so any agent can bring it back later with the same commands
 you would.
 
-And because Claude Code, Codex and **Google Antigravity** all read and write the
-*same* store, they stop being separate assistants with separate amnesia and start
-behaving like one mind with one memory. Single binary, SQLite embedded in pure Go
-(no cgo), offline.
+And because Claude Code, Codex, **Google Antigravity** and **opencode** all read
+and write the *same* store, they stop being separate assistants with separate
+amnesia and start behaving like one mind with one memory. Single binary, SQLite
+embedded in pure Go (no cgo), offline.
 
 ## The part nobody mentions
 
 **Did you know your agent's entire history is already sitting on your disk?**
 
-Claude Code, Codex and Antigravity write **every session to your local disk** —
-plain files, on your machine, right now. That's the raw material: the reasoning, the
+Claude Code, Codex, Antigravity and opencode write **every session to your local
+disk** — plain files (or a local SQLite DB, in opencode's case), on your machine,
+right now. That's the raw material: the reasoning, the
 dead-ends, the decisions you arrived at together. But it's inert. The agent can't
 recall it next time and you can't search it; it just piles up and goes stale.
 
@@ -61,13 +62,14 @@ version it, take it anywhere. If nem vanished tomorrow, your data is still just
 git commits.
 
 And once the memory lives outside the agent, the agents become **interchangeable**.
-Claude Code, Codex and Antigravity read the same store, so none of them knows you
-better than the others — the repo knows you. That changes the math:
+Claude Code, Codex, Antigravity and opencode read the same store, so none of them
+knows you better than the others — the repo knows you. That changes the math:
 
-- **Three entry-tier plans instead of one top-tier plan** (as of today, that's
-  3 × $20 vs $200). Same shared brain across all three, and three *separate*
-  rate-limit pools: when one agent caps out mid-afternoon, switch to the next
-  and keep going where you left off.
+- **Several entry-tier plans instead of one top-tier plan** (as of today, a few
+  $20 plans — or opencode with whatever provider you point it at — vs $200).
+  Same shared brain across all of them, and *separate* rate-limit pools: when
+  one agent caps out mid-afternoon, switch to the next and keep going where you
+  left off.
 - **No hosted memory service.** No platform, no per-call API bill, no dashboard
   holding your data hostage — a single binary and a repo.
 - **Models rotate; your context doesn't.** New model, new agent, new vendor —
@@ -90,7 +92,7 @@ go install github.com/Dieg0Code/nem/cmd/nem@latest
 
 ## How your agent uses it
 
-`nem init` installs the skill into Claude Code, Codex and Antigravity, and pulls
+`nem init` installs the skill into Claude Code, Codex, Antigravity and opencode, and pulls
 in your existing sessions. The agent **recalls** at the start of a session and
 **persists** what it resolves — no human in the loop:
 
@@ -110,7 +112,7 @@ say so — the agent asks first and recommends keeping that remote private.
 
 | | |
 |---|---|
-| `nem init` / `ingest` | set up `~/.nem`; pull in Codex, Claude Code & Antigravity sessions |
+| `nem init` / `ingest` | set up `~/.nem`; pull in Codex, Claude Code, Antigravity & opencode sessions |
 | `nem status` / `log` | active session; commit history |
 | `nem add` / `commit` | stage messages; freeze them into an immutable snapshot |
 | `nem fact` | durable facts + dated reminders (`--due`) — surfaced at the top of every session |

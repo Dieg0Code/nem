@@ -192,7 +192,11 @@ func TestIngest_OrchestrationIdempotent(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	rep, err := Ingest(store, NewClaudeParser(), WithRoot(root))
+	src, err := NewFileSource(NewClaudeParser(), WithRoot(root))
+	if err != nil {
+		t.Fatalf("NewFileSource: %v", err)
+	}
+	rep, err := Ingest(store, src)
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -201,7 +205,7 @@ func TestIngest_OrchestrationIdempotent(t *testing.T) {
 	}
 
 	// Segunda corrida: idempotente, 0 mensajes nuevos.
-	rep2, err := Ingest(store, NewClaudeParser(), WithRoot(root))
+	rep2, err := Ingest(store, src)
 	if err != nil {
 		t.Fatalf("Ingest 2: %v", err)
 	}

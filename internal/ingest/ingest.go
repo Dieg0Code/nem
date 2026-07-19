@@ -1,6 +1,10 @@
-// Package ingest parsea los archivos de sesión de los agentes (Codex, Claude
-// Code) y los persiste en el Store de nem. Los parsers son puros (archivo →
-// ParsedChat); la orquestación inserta de forma idempotente.
+// Package ingest lee las sesiones de los agentes y las persiste en el Store de
+// nem. La abstracción central es Source: una fuente de sesiones que aísla a nem
+// de CÓMO persiste cada agente. Los agentes que guardan transcripts JSONL
+// (Codex, Claude Code, Antigravity) se adaptan con NewFileSource sobre un
+// Parser puro (archivo → ParsedChat); los de otra naturaleza (opencode y su
+// SQLite) implementan Source directo. La orquestación inserta de forma
+// idempotente.
 package ingest
 
 import (
@@ -8,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"iter"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,10 +56,25 @@ type ParsedChat struct {
 	Messages []db.Message
 }
 
+// Source es una fuente de sesiones de un agente. Es el seam que desacopla a
+// nem del medio de persistencia de cada agente: Ingest solo conoce esta
+// interfaz, y todo lo específico de un agente (formato, rutas, esquema) vive
+// encapsulado en su Source. Si un agente cambia su forma de persistir, solo
+// cambia su Source.
+type Source interface {
+	// Name identifica al agente: "codex" | "claude" | "antigravity" | "opencode".
+	Name() string
+	// Sessions itera las sesiones de la fuente. Cada elemento es una sesión
+	// parseada o un error de esa sesión; los errores por sesión no abortan la
+	// iteración. Una fuente cuyo agente no está instalado itera vacío.
+	Sessions() iter.Seq2[*ParsedChat, error]
+}
+
 // Parser convierte un archivo de sesión de un agente en un ParsedChat. Es la
-// abstracción que implementa cada agente soportado (codex, claude).
+// abstracción que implementan los agentes con sesiones en archivos (codex,
+// claude, antigravity); se eleva a Source con NewFileSource.
 type Parser interface {
-	// Source identifica al agente: "codex" | "claude".
+	// Source identifica al agente: "codex" | "claude" | "antigravity".
 	Source() string
 	// DefaultRoot devuelve el directorio raíz por defecto de las sesiones.
 	DefaultRoot() (string, error)
@@ -65,22 +85,23 @@ type Parser interface {
 // Report resume el resultado de una corrida de ingesta.
 type Report struct {
 	Source   string
-	Files    int
+	Scanned  int // sesiones examinadas (archivos o filas, según la fuente)
 	Chats    int
 	Messages int64
 	Skipped  int
 	Errors   []string
 }
 
-// config contiene las opciones de Ingest.
+// config contiene las opciones de una fuente.
 type config struct {
 	root string
 }
 
-// Option configura una corrida de Ingest.
+// Option configura una fuente de sesiones.
 type Option func(*config) error
 
-// WithRoot fuerza el directorio raíz de sesiones (en vez del default del parser).
+// WithRoot fuerza la raíz de sesiones de la fuente: el directorio de
+// transcripts para las fuentes de archivos, la ruta de la DB para opencode.
 func WithRoot(root string) Option {
 	return func(c *config) error {
 		if root == "" {
@@ -91,44 +112,22 @@ func WithRoot(root string) Option {
 	}
 }
 
-// Ingest recorre los archivos .jsonl bajo el root del parser, los parsea y los
-// persiste en el store de forma idempotente (re-ingestar no duplica). Los
-// errores por archivo no abortan la corrida: se acumulan en el Report.
-func Ingest(store db.Store, p Parser, options ...Option) (*Report, error) {
+// Ingest consume las sesiones de la fuente y las persiste en el store de forma
+// idempotente (re-ingestar no duplica). Los errores por sesión no abortan la
+// corrida: se acumulan en el Report.
+func Ingest(store db.Store, src Source) (*Report, error) {
 	if store == nil {
 		return nil, errors.New("store is required")
 	}
-	if p == nil {
-		return nil, errors.New("parser is required")
+	if src == nil {
+		return nil, errors.New("source is required")
 	}
 
-	cfg := &config{}
-	for _, option := range options {
-		if err := option(cfg); err != nil {
-			return nil, fmt.Errorf("failed to apply ingest option: %w", err)
-		}
-	}
-
-	root := cfg.root
-	if root == "" {
-		r, err := p.DefaultRoot()
+	report := &Report{Source: src.Name()}
+	for parsed, err := range src.Sessions() {
+		report.Scanned++
 		if err != nil {
-			return nil, err
-		}
-		root = r
-	}
-
-	files, err := sessionFiles(root)
-	if err != nil {
-		return nil, err
-	}
-
-	report := &Report{Source: p.Source()}
-	for _, path := range files {
-		report.Files++
-		parsed, err := parseFile(p, path)
-		if err != nil {
-			report.Errors = append(report.Errors, fmt.Sprintf("%s: %v", path, err))
+			report.Errors = append(report.Errors, err.Error())
 			continue
 		}
 		if parsed == nil || len(parsed.Messages) == 0 {
@@ -136,12 +135,12 @@ func Ingest(store db.Store, p Parser, options ...Option) (*Report, error) {
 			continue
 		}
 		if err := store.UpsertChat(&parsed.Chat); err != nil {
-			report.Errors = append(report.Errors, fmt.Sprintf("%s: %v", path, err))
+			report.Errors = append(report.Errors, fmt.Sprintf("%s: %v", parsed.Chat.SessionPath, err))
 			continue
 		}
 		n, err := store.InsertMessages(parsed.Messages)
 		if err != nil {
-			report.Errors = append(report.Errors, fmt.Sprintf("%s: %v", path, err))
+			report.Errors = append(report.Errors, fmt.Sprintf("%s: %v", parsed.Chat.SessionPath, err))
 			continue
 		}
 		report.Chats++
@@ -149,6 +148,61 @@ func Ingest(store db.Store, p Parser, options ...Option) (*Report, error) {
 	}
 
 	return report, nil
+}
+
+// fileSource adapta un Parser basado en archivos JSONL a la interfaz Source:
+// camina la raíz y parsea cada transcript encontrado.
+type fileSource struct {
+	parser Parser
+	root   string // "" = DefaultRoot() del parser
+}
+
+// NewFileSource eleva un Parser de archivos a Source. Sin WithRoot usa el
+// DefaultRoot del parser.
+func NewFileSource(p Parser, options ...Option) (Source, error) {
+	if p == nil {
+		return nil, errors.New("parser is required")
+	}
+	cfg := &config{}
+	for _, option := range options {
+		if err := option(cfg); err != nil {
+			return nil, fmt.Errorf("failed to apply source option: %w", err)
+		}
+	}
+	return &fileSource{parser: p, root: cfg.root}, nil
+}
+
+func (s *fileSource) Name() string { return s.parser.Source() }
+
+func (s *fileSource) Sessions() iter.Seq2[*ParsedChat, error] {
+	return func(yield func(*ParsedChat, error) bool) {
+		root := s.root
+		if root == "" {
+			r, err := s.parser.DefaultRoot()
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			root = r
+		}
+		files, err := sessionFiles(root)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		for _, path := range files {
+			parsed, err := parseFile(s.parser, path)
+			if err != nil {
+				if !yield(nil, fmt.Errorf("%s: %w", path, err)) {
+					return
+				}
+				continue
+			}
+			if !yield(parsed, nil) {
+				return
+			}
+		}
+	}
 }
 
 // parseFile abre y parsea un único archivo, garantizando el cierre.

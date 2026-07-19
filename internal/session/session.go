@@ -1,5 +1,6 @@
-// Package session detecta la sesión de agente activa: el archivo de sesión más
-// recientemente modificado entre Codex y Claude Code.
+// Package session detecta la sesión de agente activa: la sesión más
+// recientemente modificada entre los agentes soportados (transcript .jsonl
+// para Codex/Claude/Antigravity, fila de la DB para opencode).
 package session
 
 import (
@@ -12,12 +13,14 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Dieg0Code/nem/internal/ingest"
 )
 
 // Session identifica una sesión de agente detectada.
 type Session struct {
 	ChatID  string
-	Source  string // "codex" | "claude" | "antigravity"
+	Source  string // "codex" | "claude" | "antigravity" | "opencode"
 	Path    string
 	ModTime time.Time
 }
@@ -32,6 +35,7 @@ type config struct {
 	codexRoot       string
 	claudeRoot      string
 	antigravityRoot string
+	opencodeDB      string
 }
 
 // Option configura el Detector.
@@ -71,14 +75,27 @@ func WithAntigravityRoot(root string) Option {
 	}
 }
 
+// WithOpencodeDB fuerza la ruta de la DB de sesiones de opencode (default
+// ~/.local/share/opencode/opencode.db, honrando XDG_DATA_HOME).
+func WithOpencodeDB(path string) Option {
+	return func(c *config) error {
+		if path == "" {
+			return errors.New("opencode db path cannot be empty")
+		}
+		c.opencodeDB = path
+		return nil
+	}
+}
+
 type detector struct {
 	codexRoot       string
 	claudeRoot      string
 	antigravityRoot string
+	opencodeDB      string
 }
 
-// NewDetector crea un Detector. Por defecto usa ~/.codex/sessions y
-// ~/.claude/projects.
+// NewDetector crea un Detector. Por defecto usa ~/.codex/sessions,
+// ~/.claude/projects, ~/.gemini/antigravity-cli/brain y la DB de opencode.
 func NewDetector(options ...Option) (Detector, error) {
 	cfg := &config{}
 	for _, option := range options {
@@ -99,7 +116,17 @@ func NewDetector(options ...Option) (Detector, error) {
 	if cfg.antigravityRoot == "" {
 		cfg.antigravityRoot = filepath.Join(home, ".gemini", "antigravity-cli", "brain")
 	}
-	return &detector{codexRoot: cfg.codexRoot, claudeRoot: cfg.claudeRoot, antigravityRoot: cfg.antigravityRoot}, nil
+	if cfg.opencodeDB == "" {
+		// Best-effort: si no se puede resolver queda "", y la detección de
+		// opencode simplemente no participa.
+		cfg.opencodeDB, _ = ingest.DefaultOpencodeDBPath()
+	}
+	return &detector{
+		codexRoot:       cfg.codexRoot,
+		claudeRoot:      cfg.claudeRoot,
+		antigravityRoot: cfg.antigravityRoot,
+		opencodeDB:      cfg.opencodeDB,
+	}, nil
 }
 
 var uuidRE = regexp.MustCompile(`([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})`)
@@ -134,6 +161,7 @@ func (d *detector) Detect() (*Session, error) {
 	codex := newest(d.codexRoot)
 	claude := newest(d.claudeRoot)
 	antigravity := newestAntigravity(d.antigravityRoot)
+	opencode := newestOpencode(d.opencodeDB)
 
 	var best *fileHit
 	var source string
@@ -146,12 +174,19 @@ func (d *detector) Detect() (*Session, error) {
 	if antigravity != nil && (best == nil || antigravity.modTime.After(best.modTime)) {
 		best, source = antigravity, "antigravity"
 	}
+	if opencode != nil && (best == nil || opencode.modTime.After(best.modTime)) {
+		best, source = opencode, "opencode"
+	}
 	if best == nil {
 		return nil, nil
 	}
 
+	chatID := best.chatID
+	if chatID == "" {
+		chatID = chatIDFromPath(best.path, source)
+	}
 	return &Session{
-		ChatID:  chatIDFromPath(best.path, source),
+		ChatID:  chatID,
 		Source:  source,
 		Path:    best.path,
 		ModTime: best.modTime,
@@ -171,6 +206,7 @@ func Recent(window time.Duration, options ...Option) ([]Session, error) {
 	out = append(out, recentUnder(dd.codexRoot, "codex", since)...)
 	out = append(out, recentUnder(dd.claudeRoot, "claude", since)...)
 	out = append(out, recentUnder(dd.antigravityRoot, "antigravity", since)...)
+	out = append(out, recentOpencode(dd.opencodeDB, since)...)
 	sort.Slice(out, func(i, j int) bool { return out[i].ModTime.After(out[j].ModTime) })
 	return out, nil
 }
@@ -178,6 +214,7 @@ func Recent(window time.Duration, options ...Option) ([]Session, error) {
 type fileHit struct {
 	path    string
 	modTime time.Time
+	chatID  string // "" = derivar del path con chatIDFromPath
 }
 
 // newest devuelve el .jsonl más recientemente modificado bajo root, o nil.
@@ -221,6 +258,41 @@ func newestAntigravity(root string) *fileHit {
 		return nil
 	})
 	return best
+}
+
+// newestOpencode devuelve la sesión de opencode más recientemente actualizada,
+// leída de su DB (no hay archivo por sesión cuyo mtime mirar). Best-effort:
+// cualquier fallo se trata como "sin sesión".
+func newestOpencode(dbPath string) *fileHit {
+	if dbPath == "" {
+		return nil
+	}
+	stamps, err := ingest.OpencodeSessionStamps(dbPath, time.Time{})
+	if err != nil || len(stamps) == 0 {
+		return nil
+	}
+	return &fileHit{path: dbPath, modTime: stamps[0].Updated, chatID: stamps[0].ID}
+}
+
+// recentOpencode lista las sesiones de opencode actualizadas desde `since`.
+func recentOpencode(dbPath string, since time.Time) []Session {
+	if dbPath == "" {
+		return nil
+	}
+	stamps, err := ingest.OpencodeSessionStamps(dbPath, since)
+	if err != nil {
+		return nil
+	}
+	var out []Session
+	for _, s := range stamps {
+		out = append(out, Session{
+			ChatID:  s.ID,
+			Source:  "opencode",
+			Path:    dbPath,
+			ModTime: s.Updated,
+		})
+	}
+	return out
 }
 
 func recentUnder(root, source string, since time.Time) []Session {

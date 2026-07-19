@@ -1,7 +1,7 @@
 // Package skill instala el "agent skill" de nem: un SKILL.md que le enseña al
-// agente (Claude Code, Codex, Antigravity) cuándo y cómo usar nem, cerrando el
-// loop de que el agente persista su propio contexto. nem es dueño del
-// subdirectorio "nem" dentro de skills/ y lo regenera de forma idempotente;
+// agente (Claude Code, Codex, Antigravity, opencode) cuándo y cómo usar nem,
+// cerrando el loop de que el agente persista su propio contexto. nem es dueño
+// del subdirectorio "nem" dentro de skills/ y lo regenera de forma idempotente;
 // nunca toca otros skills.
 package skill
 
@@ -18,15 +18,17 @@ const skillName = "nem"
 
 // Agent identifica a un agente soportado por la instalación del skill.
 type Agent struct {
-	// Name es el identificador del agente: "claude" | "codex" | "antigravity".
+	// Name es el identificador del agente: "claude" | "codex" | "antigravity" |
+	// "opencode".
 	Name string
-	// Root es el home del agente (~/.claude, ~/.codex o ~/.gemini/antigravity-cli).
+	// Root es el home del agente (~/.claude, ~/.codex,
+	// ~/.gemini/antigravity-cli o ~/.config/opencode).
 	Root string
 }
 
 // Installed describe un skill efectivamente escrito para un agente.
 type Installed struct {
-	Agent string // "claude" | "codex"
+	Agent string // nombre del agente ("claude", "codex", ...)
 	Path  string // ruta absoluta del SKILL.md escrito
 }
 
@@ -86,6 +88,18 @@ func WithAntigravityRoot(root string) Option {
 	}
 }
 
+// WithOpencodeRoot fija el config dir de opencode (default ~/.config/opencode,
+// donde opencode busca skills/). Útil para tests.
+func WithOpencodeRoot(root string) Option {
+	return func(c *config) error {
+		if root == "" {
+			return errors.New("opencode root cannot be empty")
+		}
+		c.agents = append(c.agents, Agent{Name: "opencode", Root: root})
+		return nil
+	}
+}
+
 // WithContent reemplaza el contenido del skill (default: el SKILL.md embebido).
 // Pensado para tests; en producción se usa el template compilado.
 func WithContent(content string) Option {
@@ -98,8 +112,8 @@ func WithContent(content string) Option {
 	}
 }
 
-// New crea un Installer. Sin WithClaudeRoot/WithCodexRoot/WithAntigravityRoot
-// usa los homes por defecto (~/.claude, ~/.codex, ~/.gemini/antigravity-cli)
+// New crea un Installer. Sin opciones With*Root usa los homes por defecto
+// (~/.claude, ~/.codex, ~/.gemini/antigravity-cli, ~/.config/opencode)
 // derivados de os.UserHomeDir().
 func New(options ...Option) (Installer, error) {
 	cfg := &config{content: skillTemplate}
@@ -126,8 +140,8 @@ type installer struct {
 }
 
 // defaultAgents arma la lista de agentes por defecto (~/.claude, ~/.codex,
-// ~/.gemini/antigravity-cli), consistente con los DefaultRoot de los parsers de
-// ingest.
+// ~/.gemini/antigravity-cli, ~/.config/opencode), consistente con las raíces
+// por defecto de las fuentes de ingest.
 func defaultAgents() ([]Agent, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -137,7 +151,17 @@ func defaultAgents() ([]Agent, error) {
 		{Name: "claude", Root: filepath.Join(home, ".claude")},
 		{Name: "codex", Root: filepath.Join(home, ".codex")},
 		{Name: "antigravity", Root: filepath.Join(home, ".gemini", "antigravity-cli")},
+		{Name: "opencode", Root: opencodeConfigDir(home)},
 	}, nil
+}
+
+// opencodeConfigDir resuelve el config dir de opencode, honrando
+// XDG_CONFIG_HOME (opencode usa rutas XDG incluso en Windows).
+func opencodeConfigDir(home string) string {
+	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
+		return filepath.Join(x, "opencode")
+	}
+	return filepath.Join(home, ".config", "opencode")
 }
 
 // Install escribe el SKILL.md en cada agente cuyo home exista. Los agentes

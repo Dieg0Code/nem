@@ -47,7 +47,9 @@ type closeOpts struct {
 	noIndex  bool
 }
 
-var closeParsers = allParsers
+// closeSources es inyectable para que los tests corran close sin tocar los
+// homes reales de los agentes.
+var closeSources = allSources
 
 func runClose(cmd *cobra.Command, opts closeOpts) error {
 	if strings.TrimSpace(opts.message) == "" {
@@ -65,7 +67,11 @@ func runClose(cmd *cobra.Command, opts closeOpts) error {
 
 	out := cmd.OutOrStdout()
 	fmt.Fprintln(out, "ingesting agent sessions...")
-	if err := ingestSessions(out, store, closeParsers()); err != nil {
+	sources, err := closeSources()
+	if err != nil {
+		return err
+	}
+	if err := ingestSessions(out, store, sources); err != nil {
 		return err
 	}
 

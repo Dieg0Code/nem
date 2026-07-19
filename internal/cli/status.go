@@ -55,7 +55,7 @@ func runStatus(cmd *cobra.Command, opts statusOpts) error {
 		return err
 	}
 	if chatID == "" {
-		fmt.Fprintln(out, "No active session detected (Codex/Claude/Antigravity).")
+		fmt.Fprintln(out, "No active session detected (Codex/Claude/Antigravity/opencode).")
 		fmt.Fprintln(out, "Open a session with your agent, or use 'nem status --chat <id>'.")
 		return nil
 	}

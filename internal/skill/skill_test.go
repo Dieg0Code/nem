@@ -166,3 +166,21 @@ func TestInstall_DefaultContentIsEmbeddedTemplate(t *testing.T) {
 		t.Error("embedded Template() is empty")
 	}
 }
+
+func TestInstall_Opencode(t *testing.T) {
+	oc := t.TempDir()
+	inst, err := New(WithOpencodeRoot(oc), WithContent("X"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	rep, err := inst.Install()
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if len(rep.Installed) != 1 || rep.Installed[0].Agent != "opencode" {
+		t.Fatalf("installed = %+v, want only opencode", rep.Installed)
+	}
+	if _, ok := readSkill(t, oc); !ok {
+		t.Errorf("SKILL.md missing under opencode root")
+	}
+}

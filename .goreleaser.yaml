@@ -56,7 +56,7 @@ scoops:
       name: scoop-bucket
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/Dieg0Code/nem
-    description: Git-style versioned memory for AI coding agents (Claude Code, Codex & Antigravity).
+    description: Git-style versioned memory for AI coding agents (Claude Code, Codex, Antigravity & opencode).
     license: MIT
 
 # macOS/Linux: brew install Dieg0Code/homebrew-tap/nem
@@ -66,7 +66,7 @@ homebrew_casks:
       name: homebrew-tap
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/Dieg0Code/nem
-    description: Git-style versioned memory for AI coding agents (Claude Code, Codex & Antigravity).
+    description: Git-style versioned memory for AI coding agents (Claude Code, Codex, Antigravity & opencode).
     # Quita la cuarentena de macOS para que el binario sin firmar pueda correr.
     hooks:
       post:

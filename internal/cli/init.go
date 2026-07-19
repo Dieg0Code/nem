@@ -22,7 +22,7 @@ func newInitCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&noSkill, "no-skill", false,
-		"do not install the nem agent skill into Claude Code / Codex / Antigravity")
+		"do not install the nem agent skill into the detected agents")
 	cmd.Flags().BoolVar(&noIngest, "no-ingest", false,
 		"do not ingest existing agent sessions on init")
 	return cmd
@@ -67,7 +67,10 @@ func runInit(cmd *cobra.Command, noSkill, noIngest bool) error {
 	// (idempotente; no fatal: el store ya quedó usable).
 	if !noIngest {
 		fmt.Fprintln(out, "ingesting agent sessions...")
-		if err := ingestSessions(out, store, allParsers()); err != nil {
+		sources, err := allSources()
+		if err != nil {
+			fmt.Fprintf(out, "warning: ingest incomplete: %v\n", err)
+		} else if err := ingestSessions(out, store, sources); err != nil {
 			fmt.Fprintf(out, "warning: ingest incomplete: %v\n", err)
 		}
 	}

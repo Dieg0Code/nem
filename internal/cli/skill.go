@@ -22,7 +22,7 @@ func newSkillCmd() *cobra.Command {
 func newSkillInstallCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "install",
-		Short: "Install the nem agent skill into Claude Code, Codex and/or Antigravity",
+		Short: "Install the nem agent skill into the detected agents (Claude Code, Codex, Antigravity, opencode)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return installSkill(cmd)
 		},
@@ -42,7 +42,7 @@ func installSkill(cmd *cobra.Command) error {
 	}
 	out := cmd.OutOrStdout()
 	if len(report.Installed) == 0 {
-		fmt.Fprintln(out, "no supported agent (Claude Code, Codex, Antigravity) detected; agent skill not installed")
+		fmt.Fprintln(out, "no supported agent (Claude Code, Codex, Antigravity, opencode) detected; agent skill not installed")
 		return nil
 	}
 	for _, in := range report.Installed {

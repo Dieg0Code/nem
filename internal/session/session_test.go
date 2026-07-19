@@ -1,6 +1,7 @@
 package session
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -69,7 +70,8 @@ func TestDetect_FallsBackToNewestFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	d, _ := NewDetector(WithClaudeRoot(claudeRoot), WithCodexRoot(t.TempDir()))
+	d, _ := NewDetector(WithClaudeRoot(claudeRoot), WithCodexRoot(t.TempDir()),
+		WithAntigravityRoot(t.TempDir()), WithOpencodeDB(filepath.Join(t.TempDir(), "none.db")))
 	s, err := d.Detect()
 	if err != nil {
 		t.Fatalf("Detect: %v", err)
@@ -107,7 +109,8 @@ func TestRecent_ReturnsSessionsByModTime(t *testing.T) {
 		}
 	}
 
-	got, err := Recent(time.Hour, WithCodexRoot(codexRoot), WithClaudeRoot(claudeRoot), WithAntigravityRoot(antigravityRoot))
+	got, err := Recent(time.Hour, WithCodexRoot(codexRoot), WithClaudeRoot(claudeRoot), WithAntigravityRoot(antigravityRoot),
+		WithOpencodeDB(filepath.Join(t.TempDir(), "none.db")))
 	if err != nil {
 		t.Fatalf("Recent: %v", err)
 	}
@@ -119,5 +122,68 @@ func TestRecent_ReturnsSessionsByModTime(t *testing.T) {
 	}
 	if got[1].ChatID != "anti-session" {
 		t.Fatalf("antigravity chat id = %q, want anti-session", got[1].ChatID)
+	}
+}
+
+// newOpencodeSessionDB crea una DB mínima de opencode (solo la tabla session,
+// que es lo único que consulta la detección) con una sesión.
+func newOpencodeSessionDB(t *testing.T, id string, updated time.Time) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "opencode.db")
+	sdb, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path))
+	if err != nil {
+		t.Fatalf("open fixture db: %v", err)
+	}
+	defer sdb.Close()
+	if _, err := sdb.Exec(`CREATE TABLE session (id TEXT PRIMARY KEY, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sdb.Exec(`INSERT INTO session VALUES (?, ?, ?)`, id, updated.UnixMilli(), updated.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestDetect_OpencodeFromDB(t *testing.T) {
+	clearAgentEnv(t)
+	claudeRoot := t.TempDir()
+	dir := filepath.Join(claudeRoot, "proj")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	older := filepath.Join(dir, "claude-session.jsonl")
+	if err := os.WriteFile(older, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(older, past, past); err != nil {
+		t.Fatal(err)
+	}
+
+	dbPath := newOpencodeSessionDB(t, "ses_active", time.Now())
+
+	d, _ := NewDetector(WithClaudeRoot(claudeRoot), WithCodexRoot(t.TempDir()),
+		WithAntigravityRoot(t.TempDir()), WithOpencodeDB(dbPath))
+	s, err := d.Detect()
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if s == nil || s.ChatID != "ses_active" || s.Source != "opencode" {
+		t.Fatalf("Detect = %+v, want ses_active / opencode", s)
+	}
+}
+
+func TestRecent_IncludesOpencode(t *testing.T) {
+	clearAgentEnv(t)
+	dbPath := newOpencodeSessionDB(t, "ses_recent", time.Now().Add(-5*time.Minute))
+
+	got, err := Recent(time.Hour,
+		WithCodexRoot(t.TempDir()), WithClaudeRoot(t.TempDir()),
+		WithAntigravityRoot(t.TempDir()), WithOpencodeDB(dbPath))
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	if len(got) != 1 || got[0].ChatID != "ses_recent" || got[0].Source != "opencode" {
+		t.Fatalf("Recent = %+v, want [ses_recent/opencode]", got)
 	}
 }

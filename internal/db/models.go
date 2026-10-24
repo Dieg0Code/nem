@@ -14,14 +14,18 @@ type Chat struct {
 
 // Message es un turno individual dentro de un chat. El campo Seq da orden
 // determinístico dentro del chat (los timestamps pueden colisionar).
+//
+// idx_messages_stamps cubre MessageStamps (el cómputo de tiempos que corre el
+// índice por cada chat): sin él, leer rol y timestamp obliga a cargar la fila
+// entera, contenido incluido, de cada mensaje del store.
 type Message struct {
 	ID         string `gorm:"primaryKey"`
-	ChatID     string `gorm:"index"`
-	Role       string // "user" | "assistant" | "tool" | "system"
+	ChatID     string `gorm:"index;index:idx_messages_stamps,priority:1"`
+	Role       string `gorm:"index:idx_messages_stamps,priority:4"` // "user" | "assistant" | "tool" | "system"
 	Content    string
-	Timestamp  int64
+	Timestamp  int64 `gorm:"index:idx_messages_stamps,priority:3"`
 	TokenCount int
-	Seq        int64 `gorm:"index"` // orden dentro del chat
+	Seq        int64 `gorm:"index;index:idx_messages_stamps,priority:2"` // orden dentro del chat
 }
 
 // Commit es un snapshot INMUTABLE de un rango de mensajes. Copia el texto en

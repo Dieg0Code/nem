@@ -222,6 +222,61 @@ func TestIngest_OrchestrationIdempotent(t *testing.T) {
 	}
 }
 
+func TestIngest_SkipsUnchangedSessions(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "sess-y.jsonl")
+	session := `{"type":"user","uuid":"u1","timestamp":"2026-05-09T00:31:46.588Z","sessionId":"sess-y","cwd":"/home/x/proj","message":{"role":"user","content":"hola"}}
+`
+	if err := os.WriteFile(path, []byte(session), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Un archivo que el parser descarta (sin mensajes) también se recuerda.
+	if err := os.WriteFile(filepath.Join(root, "empty.jsonl"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := db.New(db.WithPath(filepath.Join(t.TempDir(), "nem.db")))
+	if err != nil {
+		t.Fatalf("db.New: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	src, err := NewFileSource(NewClaudeParser(), WithRoot(root))
+	if err != nil {
+		t.Fatalf("NewFileSource: %v", err)
+	}
+
+	if rep, err := Ingest(store, src); err != nil || rep.Scanned != 2 || rep.Messages != 1 {
+		t.Fatalf("first ingest: %+v, %v; want 2 scanned, 1 message", rep, err)
+	}
+
+	// Sin cambios: ningún archivo se re-parsea.
+	rep, err := Ingest(store, src)
+	if err != nil {
+		t.Fatalf("Ingest 2: %v", err)
+	}
+	if rep.Scanned != 0 || rep.Unchanged != 2 {
+		t.Errorf("second ingest: scanned=%d unchanged=%d, want 0/2", rep.Scanned, rep.Unchanged)
+	}
+
+	// El agente agrega un turno: solo esa sesión se re-lee y aporta lo nuevo.
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WriteString(`{"type":"assistant","uuid":"a1","timestamp":"2026-05-09T00:31:50.000Z","sessionId":"sess-y","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}` + "\n")
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err = Ingest(store, src)
+	if err != nil {
+		t.Fatalf("Ingest 3: %v", err)
+	}
+	if rep.Scanned != 1 || rep.Unchanged != 1 || rep.Messages != 1 {
+		t.Errorf("after append: scanned=%d unchanged=%d messages=%d, want 1/1/1", rep.Scanned, rep.Unchanged, rep.Messages)
+	}
+}
+
 // roles devuelve los roles de los mensajes (helper de diagnóstico para los tests).
 func roles(msgs []db.Message) []string {
 	out := make([]string, len(msgs))

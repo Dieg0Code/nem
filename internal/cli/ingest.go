@@ -98,8 +98,8 @@ func ingestSessions(out io.Writer, store db.Store, sources []ingest.Source) erro
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "%s: %d chats, %d new messages (%d scanned, %d skipped)\n",
-			rep.Source, rep.Chats, rep.Messages, rep.Scanned, rep.Skipped)
+		fmt.Fprintf(out, "%s: %d chats, %d new messages (%d scanned, %d unchanged, %d skipped)\n",
+			rep.Source, rep.Chats, rep.Messages, rep.Scanned, rep.Unchanged, rep.Skipped)
 		if len(rep.Errors) > 0 {
 			fmt.Fprintf(out, "  %d sessions with errors (first 3):\n", len(rep.Errors))
 			for i, e := range rep.Errors {

@@ -54,6 +54,9 @@ func truncate(s string, max int) string {
 type ParsedChat struct {
 	Chat     db.Chat
 	Messages []db.Message
+	// Fingerprint es la huella de la sesión al leerla ("" = la fuente no es
+	// Incremental). Ingest la registra tras persistir la sesión.
+	Fingerprint string
 }
 
 // Source es una fuente de sesiones de un agente. Es el seam que desacopla a
@@ -70,6 +73,21 @@ type Source interface {
 	Sessions() iter.Seq2[*ParsedChat, error]
 }
 
+// Incremental es una Source capaz de saltarse las sesiones que no cambiaron
+// desde la última ingesta. Es opcional: una Source que no la implementa se
+// re-lee entera en cada corrida (la inserción igual es idempotente, solo más
+// lenta).
+type Incremental interface {
+	Source
+	// ChangedSessions itera solo las sesiones para las que changed(ruta,
+	// huella) devuelve true; las demás se saltan sin parsearse.
+	ChangedSessions(changed func(path, fingerprint string) bool) iter.Seq2[*ParsedChat, error]
+}
+
+// cursorVersion entra en la huella de cada sesión. Subirlo cuando un parser
+// cambie lo que extrae, para que la próxima ingesta re-lea todo.
+const cursorVersion = 1
+
 // Parser convierte un archivo de sesión de un agente en un ParsedChat. Es la
 // abstracción que implementan los agentes con sesiones en archivos (codex,
 // claude, antigravity); se eleva a Source con NewFileSource.
@@ -84,12 +102,13 @@ type Parser interface {
 
 // Report resume el resultado de una corrida de ingesta.
 type Report struct {
-	Source   string
-	Scanned  int // sesiones examinadas (archivos o filas, según la fuente)
-	Chats    int
-	Messages int64
-	Skipped  int
-	Errors   []string
+	Source    string
+	Scanned   int // sesiones examinadas (archivos o filas, según la fuente)
+	Chats     int
+	Messages  int64
+	Skipped   int
+	Unchanged int // sesiones saltadas sin parsear (huella igual a la ingestada)
+	Errors    []string
 }
 
 // config contiene las opciones de una fuente.
@@ -113,8 +132,9 @@ func WithRoot(root string) Option {
 }
 
 // Ingest consume las sesiones de la fuente y las persiste en el store de forma
-// idempotente (re-ingestar no duplica). Los errores por sesión no abortan la
-// corrida: se acumulan en el Report.
+// idempotente (re-ingestar no duplica). Si la fuente es Incremental, salta las
+// sesiones cuya huella no cambió desde la última corrida. Los errores por
+// sesión no abortan la corrida: se acumulan en el Report.
 func Ingest(store db.Store, src Source) (*Report, error) {
 	if store == nil {
 		return nil, errors.New("store is required")
@@ -124,7 +144,32 @@ func Ingest(store db.Store, src Source) (*Report, error) {
 	}
 
 	report := &Report{Source: src.Name()}
-	for parsed, err := range src.Sessions() {
+	sessions := src.Sessions()
+	if inc, ok := src.(Incremental); ok {
+		seen, err := store.IngestCursors(src.Name())
+		if err != nil {
+			return nil, err
+		}
+		sessions = inc.ChangedSessions(func(path, fingerprint string) bool {
+			if seen[path] == fingerprint {
+				report.Unchanged++
+				return false
+			}
+			return true
+		})
+	}
+	// markSeen registra la huella de una sesión ya persistida. Un fallo no
+	// pierde datos (solo obliga a re-leerla la próxima vez), pero se reporta.
+	markSeen := func(parsed *ParsedChat) {
+		if parsed.Fingerprint == "" {
+			return
+		}
+		if err := store.SetIngestCursor(src.Name(), parsed.Chat.SessionPath, parsed.Fingerprint); err != nil {
+			report.Errors = append(report.Errors, err.Error())
+		}
+	}
+
+	for parsed, err := range sessions {
 		report.Scanned++
 		if err != nil {
 			report.Errors = append(report.Errors, err.Error())
@@ -132,6 +177,9 @@ func Ingest(store db.Store, src Source) (*Report, error) {
 		}
 		if parsed == nil || len(parsed.Messages) == 0 {
 			report.Skipped++
+			if parsed != nil {
+				markSeen(parsed)
+			}
 			continue
 		}
 		if err := store.UpsertChat(&parsed.Chat); err != nil {
@@ -145,6 +193,7 @@ func Ingest(store db.Store, src Source) (*Report, error) {
 		}
 		report.Chats++
 		report.Messages += n
+		markSeen(parsed)
 	}
 
 	return report, nil
@@ -175,6 +224,10 @@ func NewFileSource(p Parser, options ...Option) (Source, error) {
 func (s *fileSource) Name() string { return s.parser.Source() }
 
 func (s *fileSource) Sessions() iter.Seq2[*ParsedChat, error] {
+	return s.ChangedSessions(func(string, string) bool { return true })
+}
+
+func (s *fileSource) ChangedSessions(changed func(path, fingerprint string) bool) iter.Seq2[*ParsedChat, error] {
 	return func(yield func(*ParsedChat, error) bool) {
 		root := s.root
 		if root == "" {
@@ -191,12 +244,15 @@ func (s *fileSource) Sessions() iter.Seq2[*ParsedChat, error] {
 			return
 		}
 		for _, path := range files {
-			parsed, err := parseFile(s.parser, path)
+			parsed, err := parseFile(s.parser, path, changed)
 			if err != nil {
 				if !yield(nil, fmt.Errorf("%s: %w", path, err)) {
 					return
 				}
 				continue
+			}
+			if parsed == nil {
+				continue // sin cambios desde la última ingesta
 			}
 			if !yield(parsed, nil) {
 				return
@@ -205,14 +261,35 @@ func (s *fileSource) Sessions() iter.Seq2[*ParsedChat, error] {
 	}
 }
 
-// parseFile abre y parsea un único archivo, garantizando el cierre.
-func parseFile(p Parser, path string) (*ParsedChat, error) {
+// parseFile abre y parsea un único archivo, garantizando el cierre. Devuelve
+// (nil, nil) si changed rechaza su huella. La huella se toma del archivo ya
+// abierto y ANTES de leerlo: si el agente escribe mientras parseamos, la huella
+// queda vieja y la próxima corrida lo re-lee (nunca se pierde un append).
+func parseFile(p Parser, path string, changed func(path, fingerprint string) bool) (*ParsedChat, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open session file: %w", err)
 	}
 	defer f.Close()
-	return p.Parse(f, path)
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat session file: %w", err)
+	}
+	fp := fmt.Sprintf("v%d:%d:%d", cursorVersion, info.Size(), info.ModTime().UnixNano())
+	if !changed(path, fp) {
+		return nil, nil
+	}
+	parsed, err := p.Parse(f, path)
+	if err != nil {
+		return nil, err
+	}
+	// La huella es del archivo: los parsers que descartan un archivo devuelven
+	// un ParsedChat vacío, sin ruta, y aun así hay que recordarlo.
+	if parsed.Chat.SessionPath == "" {
+		parsed.Chat.SessionPath = path
+	}
+	parsed.Fingerprint = fp
+	return parsed, nil
 }
 
 // sessionFiles devuelve todos los .jsonl bajo root (recursivo). Si root no

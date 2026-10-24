@@ -165,6 +165,16 @@ type NodeTerm struct {
 	LastHit int64
 }
 
+// IngestCursor es la huella de una sesión de agente ya ingestada (tamaño, mtime
+// y versión del parser). Si la huella no cambió, re-parsear la sesión no puede
+// aportar mensajes nuevos y la ingesta la salta. Estado local derivado: NO se
+// exporta en sync; borrarlo solo fuerza una re-ingesta completa (idempotente).
+type IngestCursor struct {
+	Path        string `gorm:"primaryKey"`
+	Source      string `gorm:"index"`
+	Fingerprint string
+}
+
 // models devuelve todos los modelos para AutoMigrate.
 func models() []any {
 	return []any{
@@ -178,5 +188,6 @@ func models() []any {
 		&Embedding{},
 		&SearchLog{},
 		&NodeTerm{},
+		&IngestCursor{},
 	}
 }

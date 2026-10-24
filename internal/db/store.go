@@ -26,6 +26,11 @@ type Store interface {
 	// InsertMessages inserta mensajes ignorando los que ya existen (por id).
 	// Devuelve cuántos se insertaron realmente (idempotente).
 	InsertMessages(msgs []Message) (int64, error)
+	// IngestCursors devuelve las huellas de las sesiones ya ingestadas de una
+	// fuente, por ruta de sesión.
+	IngestCursors(source string) (map[string]string, error)
+	// SetIngestCursor registra (o actualiza) la huella de una sesión ingestada.
+	SetIngestCursor(source, path, fingerprint string) error
 	// CountMessages cuenta los mensajes de un chat.
 	CountMessages(chatID string) (int64, error)
 	// LastMessages devuelve los últimos n mensajes del chat por orden Seq,

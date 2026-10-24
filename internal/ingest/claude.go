@@ -32,13 +32,18 @@ func (p *claudeParser) DefaultRoot() (string, error) {
 
 // claudeLine es una línea del log de Claude. Solo type user/assistant traen
 // message; el resto (system, ai-title, file-history-snapshot, etc.) se ignora.
+// IsSidechain marca las líneas de un subagente: traen el sessionId del padre,
+// así que ingestarlas mezclaría otra conversación (con su propio seq) en el
+// chat padre. El padre ya guarda el informe final del subagente como
+// tool_result, de modo que se descartan.
 type claudeLine struct {
-	Type      string         `json:"type"`
-	Message   *claudeMessage `json:"message"`
-	UUID      string         `json:"uuid"`
-	Timestamp string         `json:"timestamp"`
-	SessionID string         `json:"sessionId"`
-	Cwd       string         `json:"cwd"`
+	Type        string         `json:"type"`
+	IsSidechain bool           `json:"isSidechain"`
+	Message     *claudeMessage `json:"message"`
+	UUID        string         `json:"uuid"`
+	Timestamp   string         `json:"timestamp"`
+	SessionID   string         `json:"sessionId"`
+	Cwd         string         `json:"cwd"`
 }
 
 type claudeMessage struct {
@@ -88,7 +93,7 @@ func (p *claudeParser) Parse(r io.Reader, sessionPath string) (*ParsedChat, erro
 	for lines.Next() {
 		line := lines.Bytes()
 		var rec claudeLine
-		if err := json.Unmarshal(line, &rec); err != nil {
+		if err := json.Unmarshal(line, &rec); err != nil || rec.IsSidechain {
 			continue
 		}
 

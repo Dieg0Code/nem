@@ -93,6 +93,42 @@ func TestClaudeParser_Parse(t *testing.T) {
 	}
 }
 
+// Un subagente escribe su propio transcript con el sessionId del padre y
+// isSidechain=true. Antes se fundía en el chat padre con seq duplicados.
+func TestClaudeParser_SkipsSidechains(t *testing.T) {
+	const sub = `
+{"type":"user","uuid":"s1","isSidechain":true,"agentId":"a1","timestamp":"2026-05-09T00:33:00.000Z","sessionId":"sess-1","cwd":"/home/diego/dev/nem","message":{"role":"user","content":"revisa el diff"}}
+{"type":"assistant","uuid":"s2","isSidechain":true,"agentId":"a1","timestamp":"2026-05-09T00:33:05.000Z","sessionId":"sess-1","message":{"role":"assistant","content":[{"type":"text","text":"sin hallazgos"}]}}
+`
+	pc, err := NewClaudeParser().Parse(strings.NewReader(sub), "agent-a1.jsonl")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(pc.Messages) != 0 {
+		t.Fatalf("sidechain produced %d messages, want 0", len(pc.Messages))
+	}
+	if pc.Chat.ID == "sess-1" {
+		t.Errorf("sidechain metadata leaked into parent chat id")
+	}
+
+	// Formato viejo: líneas de sidechain intercaladas en el archivo del padre.
+	const mixed = `
+{"type":"user","uuid":"u1","isSidechain":false,"timestamp":"2026-05-09T00:31:46.588Z","sessionId":"sess-1","message":{"role":"user","content":"arregla el bug"}}
+{"type":"user","uuid":"s1","isSidechain":true,"timestamp":"2026-05-09T00:31:47.000Z","sessionId":"sess-1","message":{"role":"user","content":"revisa el diff"}}
+{"type":"assistant","uuid":"a1","timestamp":"2026-05-09T00:31:50.000Z","sessionId":"sess-1","message":{"role":"assistant","content":[{"type":"text","text":"listo"}]}}
+`
+	pc, err = NewClaudeParser().Parse(strings.NewReader(mixed), "sess-1.jsonl")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(pc.Messages) != 2 || pc.Messages[0].ID != "u1:0" || pc.Messages[1].ID != "a1:0" {
+		t.Fatalf("messages = %v, want only the parent's u1, a1", pc.Messages)
+	}
+	if pc.Messages[1].Seq != 2 {
+		t.Errorf("parent seq = %d, want 2 (sidechain must not consume seq)", pc.Messages[1].Seq)
+	}
+}
+
 func TestAntigravityParser_Parse(t *testing.T) {
 	const session = `
 {"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-05-22T23:14:50Z","content":"<USER_REQUEST>\narregla el bug\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: 2026-05-22T19:14:50-04:00.\n</ADDITIONAL_METADATA>"}

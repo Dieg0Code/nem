@@ -2,8 +2,8 @@ package ingest
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
+	json "github.com/segmentio/encoding/json"
 	"iter"
 	"os"
 	"path/filepath"

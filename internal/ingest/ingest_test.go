@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Dieg0Code/nem/internal/db"
+	"github.com/klauspost/compress/zstd"
 )
 
 func TestCodexParser_Parse(t *testing.T) {
@@ -284,4 +285,52 @@ func roles(msgs []db.Message) []string {
 		out[i] = m.Role
 	}
 	return out
+}
+
+func TestIngest_ReadsZstdTranscripts(t *testing.T) {
+	const session = `{"timestamp":"2026-02-16T21:32:36.689Z","type":"session_meta","payload":{"id":"019c685e-7fe0-72c1-9bb7-809cec15e170","cwd":"/home/x/proj"}}
+{"timestamp":"2026-02-16T21:33:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"implementa el decay"}]}}
+{"timestamp":"2026-02-16T21:33:05.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"listo"}]}}
+`
+	enc, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressed := enc.EncodeAll([]byte(session), nil)
+	enc.Close()
+
+	// Codex archiva la sesión comprimida; durante la transición pueden convivir
+	// ambas versiones del mismo rollout.
+	root := t.TempDir()
+	name := "rollout-2026-02-16T18-32-29-019c685e-7fe0-72c1-9bb7-809cec15e170.jsonl"
+	if err := os.WriteFile(filepath.Join(root, name+".zst"), compressed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, name), []byte(session), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := db.New(db.WithPath(filepath.Join(t.TempDir(), "nem.db")))
+	if err != nil {
+		t.Fatalf("db.New: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	src, err := NewFileSource(NewCodexParser(), WithRoot(root))
+	if err != nil {
+		t.Fatalf("NewFileSource: %v", err)
+	}
+	rep, err := Ingest(store, src)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if rep.Scanned != 2 || len(rep.Errors) != 0 {
+		t.Fatalf("ingest: scanned=%d errors=%v, want 2 scanned, no errors", rep.Scanned, rep.Errors)
+	}
+	n, err := store.CountMessages("019c685e-7fe0-72c1-9bb7-809cec15e170")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("CountMessages = %d, want 2 (both copies dedupe to one session)", n)
+	}
 }

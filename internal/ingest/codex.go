@@ -1,9 +1,8 @@
 package ingest
 
 import (
-	"bufio"
-	"encoding/json"
 	"fmt"
+	json "github.com/segmentio/encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,10 +11,6 @@ import (
 
 	"github.com/Dieg0Code/nem/internal/db"
 )
-
-// maxLineBytes es el tope por línea del scanner. Las sesiones pueden traer
-// imágenes en base64 en una sola línea, así que damos margen amplio.
-const maxLineBytes = 64 * 1024 * 1024
 
 // codexParser implementa Parser para las sesiones de Codex
 // (~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl).
@@ -109,16 +104,12 @@ func (p *codexParser) Parse(r io.Reader, sessionPath string) (*ParsedChat, error
 		})
 	}
 
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
+	lines := newLineReader(r)
 
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
+	for lines.Next() {
+		line := lines.Bytes()
 		var rec codexLine
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+		if err := json.Unmarshal(line, &rec); err != nil {
 			continue // línea corrupta: saltar, no abortar
 		}
 		ts := parseTimestamp(rec.Timestamp)
@@ -177,7 +168,7 @@ func (p *codexParser) Parse(r io.Reader, sessionPath string) (*ParsedChat, error
 			}
 		}
 	}
-	if err := sc.Err(); err != nil {
+	if err := lines.Err(); err != nil {
 		return nil, fmt.Errorf("failed to scan codex session: %w", err)
 	}
 

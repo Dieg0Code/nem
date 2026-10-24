@@ -15,10 +15,12 @@ import (
 	"iter"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/Dieg0Code/nem/internal/db"
+	"github.com/klauspost/compress/zstd"
 )
 
 // Roles con los que se persisten los mensajes. user/assistant son la
@@ -243,43 +245,104 @@ func (s *fileSource) ChangedSessions(changed func(path, fingerprint string) bool
 			yield(nil, err)
 			return
 		}
+		// La huella se decide en serie (changed no tiene por qué ser seguro
+		// para concurrencia); solo el parseo de lo que cambió va en paralelo.
+		var todo []pendingFile
 		for _, path := range files {
-			parsed, err := parseFile(s.parser, path, changed)
+			fp, err := fingerprint(path)
 			if err != nil {
 				if !yield(nil, fmt.Errorf("%s: %w", path, err)) {
 					return
 				}
 				continue
 			}
-			if parsed == nil {
-				continue // sin cambios desde la última ingesta
+			if changed(path, fp) {
+				todo = append(todo, pendingFile{path: path, fingerprint: fp})
 			}
-			if !yield(parsed, nil) {
+		}
+
+		// Parseo paralelo con salida en orden: a lo más `workers` archivos en
+		// vuelo por delante del consumidor, así la memoria queda acotada. Los
+		// canales tienen buffer: si el consumidor corta, los workers en vuelo
+		// terminan sin bloquearse.
+		workers := runtime.GOMAXPROCS(0)
+		results := make([]chan parseResult, len(todo))
+		launch := func(i int) {
+			ch := make(chan parseResult, 1)
+			results[i] = ch
+			go func() {
+				parsed, err := parseFile(s.parser, todo[i].path, todo[i].fingerprint)
+				ch <- parseResult{parsed, err}
+			}()
+		}
+		for i := 0; i < len(todo) && i < workers; i++ {
+			launch(i)
+		}
+		for i, job := range todo {
+			r := <-results[i]
+			if next := i + workers; next < len(todo) {
+				launch(next)
+			}
+			if r.err != nil {
+				if !yield(nil, fmt.Errorf("%s: %w", job.path, r.err)) {
+					return
+				}
+				continue
+			}
+			if !yield(r.parsed, nil) {
 				return
 			}
 		}
 	}
 }
 
-// parseFile abre y parsea un único archivo, garantizando el cierre. Devuelve
-// (nil, nil) si changed rechaza su huella. La huella se toma del archivo ya
-// abierto y ANTES de leerlo: si el agente escribe mientras parseamos, la huella
-// queda vieja y la próxima corrida lo re-lee (nunca se pierde un append).
-func parseFile(p Parser, path string, changed func(path, fingerprint string) bool) (*ParsedChat, error) {
+// pendingFile es un archivo de sesión cuya huella cambió y hay que parsear.
+type pendingFile struct {
+	path        string
+	fingerprint string
+}
+
+type parseResult struct {
+	parsed *ParsedChat
+	err    error
+}
+
+// fingerprint calcula la huella de un archivo de sesión. Se toma del archivo
+// abierto (en Windows el stat por ruta puede devolver un tamaño atrasado
+// mientras el agente escribe) y ANTES de parsearlo: si el agente agrega turnos
+// mientras parseamos, la huella queda vieja y la próxima corrida lo re-lee
+// (nunca se pierde un append).
+func fingerprint(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to open session file: %w", err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return "", fmt.Errorf("failed to stat session file: %w", err)
+	}
+	return fmt.Sprintf("v%d:%d:%d", cursorVersion, info.Size(), info.ModTime().UnixNano()), nil
+}
+
+// parseFile abre y parsea un único archivo, garantizando el cierre, y le
+// asocia la huella fp tomada antes de leerlo.
+func parseFile(p Parser, path, fp string) (*ParsedChat, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open session file: %w", err)
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("failed to stat session file: %w", err)
+	var r io.Reader = f
+	if isZstd(path) {
+		dec, err := zstd.NewReader(f, zstd.WithDecoderConcurrency(1))
+		if err != nil {
+			return nil, fmt.Errorf("failed to open zstd session: %w", err)
+		}
+		defer dec.Close()
+		r = dec
 	}
-	fp := fmt.Sprintf("v%d:%d:%d", cursorVersion, info.Size(), info.ModTime().UnixNano())
-	if !changed(path, fp) {
-		return nil, nil
-	}
-	parsed, err := p.Parse(f, path)
+	parsed, err := p.Parse(r, path)
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +355,14 @@ func parseFile(p Parser, path string, changed func(path, fingerprint string) boo
 	return parsed, nil
 }
 
-// sessionFiles devuelve todos los .jsonl bajo root (recursivo). Si root no
+// isZstd indica si el transcript está comprimido: Codex archiva sus sesiones
+// viejas como .jsonl.zst, y sin leerlas una instalación nueva perdería todo el
+// historial previo.
+func isZstd(path string) bool {
+	return strings.HasSuffix(strings.ToLower(path), ".jsonl.zst")
+}
+
+// sessionFiles devuelve todos los .jsonl (y .jsonl.zst) bajo root (recursivo). Si root no
 // existe, devuelve lista vacía sin error (el agente puede no estar instalado).
 func sessionFiles(root string) ([]string, error) {
 	info, err := os.Stat(root)
@@ -311,7 +381,7 @@ func sessionFiles(root string) ([]string, error) {
 		if err != nil {
 			return nil // saltar entradas ilegibles, no abortar
 		}
-		if !d.IsDir() && strings.EqualFold(filepath.Ext(path), ".jsonl") {
+		if !d.IsDir() && (strings.EqualFold(filepath.Ext(path), ".jsonl") || isZstd(path)) {
 			files = append(files, path)
 		}
 		return nil

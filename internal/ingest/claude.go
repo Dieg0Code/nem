@@ -1,9 +1,8 @@
 package ingest
 
 import (
-	"bufio"
-	"encoding/json"
 	"fmt"
+	json "github.com/segmentio/encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -84,16 +83,12 @@ func (p *claudeParser) Parse(r io.Reader, sessionPath string) (*ParsedChat, erro
 		})
 	}
 
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
+	lines := newLineReader(r)
 
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
+	for lines.Next() {
+		line := lines.Bytes()
 		var rec claudeLine
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+		if err := json.Unmarshal(line, &rec); err != nil {
 			continue
 		}
 
@@ -139,7 +134,7 @@ func (p *claudeParser) Parse(r io.Reader, sessionPath string) (*ParsedChat, erro
 			}
 		}
 	}
-	if err := sc.Err(); err != nil {
+	if err := lines.Err(); err != nil {
 		return nil, fmt.Errorf("failed to scan claude session: %w", err)
 	}
 

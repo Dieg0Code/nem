@@ -60,6 +60,14 @@ func opencodeDSN(path string) string {
 }
 
 func (s *opencodeSource) Sessions() iter.Seq2[*ParsedChat, error] {
+	return s.ChangedSessions(func(string, string) bool { return true })
+}
+
+// ChangedSessions implementa Incremental: todas las sesiones viven en la misma
+// DB, así que la clave es db#id y la huella sale de los agregados de sus filas
+// (opencode actualiza time_updated en cada edición de un part, también durante
+// el streaming). Calcular las huellas es una sola query barata.
+func (s *opencodeSource) ChangedSessions(changed func(key, fingerprint string) bool) iter.Seq2[*ParsedChat, error] {
 	return func(yield func(*ParsedChat, error) bool) {
 		path := s.dbPath
 		if path == "" {
@@ -88,6 +96,10 @@ func (s *opencodeSource) Sessions() iter.Seq2[*ParsedChat, error] {
 			return
 		}
 		for _, sess := range sessions {
+			key := path + "#" + sess.id
+			if !changed(key, sess.fingerprint) {
+				continue
+			}
 			parsed, err := loadOpencodeSession(sdb, path, sess)
 			if err != nil {
 				if !yield(nil, fmt.Errorf("%s: session %s: %w", path, sess.id, err)) {
@@ -95,6 +107,8 @@ func (s *opencodeSource) Sessions() iter.Seq2[*ParsedChat, error] {
 				}
 				continue
 			}
+			parsed.CursorKey = key
+			parsed.Fingerprint = sess.fingerprint
 			if !yield(parsed, nil) {
 				return
 			}
@@ -108,14 +122,23 @@ type opencodeSession struct {
 	title     string
 	directory string
 	createdMs int64
+	// fingerprint resume el estado de la sesión: su time_updated y la cantidad
+	// y última edición de sus messages y parts.
+	fingerprint string
 }
 
-// opencodeSessions lista las sesiones de la DB, de más antigua a más nueva.
-// title/directory son nullable en el esquema de opencode: COALESCE evita que
-// una sola sesión sin título aborte la ingesta completa.
+// opencodeSessions lista las sesiones de la DB, de más antigua a más nueva, con
+// su huella. title/directory son nullable en el esquema de opencode: COALESCE
+// evita que una sola sesión sin título aborte la ingesta completa.
 func opencodeSessions(sdb *sql.DB) ([]opencodeSession, error) {
-	rows, err := sdb.Query(`SELECT id, COALESCE(title, ''), COALESCE(directory, ''), time_created
-		FROM session ORDER BY time_created, id`)
+	rows, err := sdb.Query(`SELECT s.id, COALESCE(s.title, ''), COALESCE(s.directory, ''), s.time_created,
+			COALESCE(s.time_updated, 0), COALESCE(m.n, 0), COALESCE(m.mx, 0), COALESCE(p.n, 0), COALESCE(p.mx, 0)
+		FROM session s
+		LEFT JOIN (SELECT session_id, count(*) n, max(time_updated) mx FROM message GROUP BY session_id) m
+			ON m.session_id = s.id
+		LEFT JOIN (SELECT session_id, count(*) n, max(time_updated) mx FROM part GROUP BY session_id) p
+			ON p.session_id = s.id
+		ORDER BY s.time_created, s.id`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query sessions: %w", err)
 	}
@@ -124,9 +147,12 @@ func opencodeSessions(sdb *sql.DB) ([]opencodeSession, error) {
 	var out []opencodeSession
 	for rows.Next() {
 		var s opencodeSession
-		if err := rows.Scan(&s.id, &s.title, &s.directory, &s.createdMs); err != nil {
+		var updated, msgs, msgMax, parts, partMax int64
+		if err := rows.Scan(&s.id, &s.title, &s.directory, &s.createdMs,
+			&updated, &msgs, &msgMax, &parts, &partMax); err != nil {
 			return nil, fmt.Errorf("failed to scan session row: %w", err)
 		}
+		s.fingerprint = fmt.Sprintf("v%d:%d:%d:%d:%d:%d", cursorVersion, updated, msgs, msgMax, parts, partMax)
 		out = append(out, s)
 	}
 	return out, rows.Err()

@@ -219,3 +219,53 @@ func TestOpencodeSessionStamps(t *testing.T) {
 		t.Errorf("missing db = (%v, %v), want (nil, nil)", stamps, err)
 	}
 }
+
+func TestOpencodeSource_SkipsUnchangedSessions(t *testing.T) {
+	path := newOpencodeFixtureDB(t)
+	store, err := db.New(db.WithPath(filepath.Join(t.TempDir(), "nem.db")))
+	if err != nil {
+		t.Fatalf("db.New: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	src, err := NewOpencodeSource(WithRoot(path))
+	if err != nil {
+		t.Fatalf("NewOpencodeSource: %v", err)
+	}
+	ingest := func() *Report {
+		t.Helper()
+		rep, err := Ingest(store, src)
+		if err != nil {
+			t.Fatalf("Ingest: %v", err)
+		}
+		return rep
+	}
+
+	if rep := ingest(); rep.Scanned != 2 {
+		t.Fatalf("first ingest scanned %d sessions, want 2", rep.Scanned)
+	}
+	if rep := ingest(); rep.Scanned != 0 || rep.Unchanged != 2 {
+		t.Fatalf("second ingest: scanned=%d unchanged=%d, want 0/2", rep.Scanned, rep.Unchanged)
+	}
+
+	// Streaming: opencode crea el part vacío y lo va llenando, bumpeando
+	// time_updated. La sesión editada se re-lee; la otra no.
+	sdb, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sdb.Close()
+	if _, err := sdb.Exec(`INSERT INTO part VALUES ('prt_15', 'msg_2', 'ses_1', 1750000030000, 1750000030000,
+		'{"type":"text","text":""}')`); err != nil {
+		t.Fatal(err)
+	}
+	if rep := ingest(); rep.Scanned != 1 || rep.Unchanged != 1 || rep.Messages != 0 {
+		t.Fatalf("after empty part: scanned=%d unchanged=%d messages=%d, want 1/1/0", rep.Scanned, rep.Unchanged, rep.Messages)
+	}
+	if _, err := sdb.Exec(`UPDATE part SET data = '{"type":"text","text":"listo"}', time_updated = 1750000031000
+		WHERE id = 'prt_15'`); err != nil {
+		t.Fatal(err)
+	}
+	if rep := ingest(); rep.Scanned != 1 || rep.Messages != 1 {
+		t.Fatalf("after streamed text: scanned=%d messages=%d, want 1/1", rep.Scanned, rep.Messages)
+	}
+}

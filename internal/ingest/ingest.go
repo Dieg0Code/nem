@@ -56,8 +56,10 @@ func truncate(s string, max int) string {
 type ParsedChat struct {
 	Chat     db.Chat
 	Messages []db.Message
-	// Fingerprint es la huella de la sesión al leerla ("" = la fuente no es
-	// Incremental). Ingest la registra tras persistir la sesión.
+	// CursorKey y Fingerprint identifican la sesión en su fuente y su huella
+	// al leerla ("" = la fuente no es Incremental). Ingest los registra tras
+	// persistir la sesión.
+	CursorKey   string
 	Fingerprint string
 }
 
@@ -81,9 +83,11 @@ type Source interface {
 // lenta).
 type Incremental interface {
 	Source
-	// ChangedSessions itera solo las sesiones para las que changed(ruta,
-	// huella) devuelve true; las demás se saltan sin parsearse.
-	ChangedSessions(changed func(path, fingerprint string) bool) iter.Seq2[*ParsedChat, error]
+	// ChangedSessions itera solo las sesiones para las que changed(clave,
+	// huella) devuelve true; las demás se saltan sin leerse. La clave es
+	// estable por sesión (la ruta del transcript, o db#id si varias sesiones
+	// comparten archivo).
+	ChangedSessions(changed func(key, fingerprint string) bool) iter.Seq2[*ParsedChat, error]
 }
 
 // cursorVersion entra en la huella de cada sesión. Subirlo cuando un parser
@@ -152,8 +156,8 @@ func Ingest(store db.Store, src Source) (*Report, error) {
 		if err != nil {
 			return nil, err
 		}
-		sessions = inc.ChangedSessions(func(path, fingerprint string) bool {
-			if seen[path] == fingerprint {
+		sessions = inc.ChangedSessions(func(key, fingerprint string) bool {
+			if seen[key] == fingerprint {
 				report.Unchanged++
 				return false
 			}
@@ -163,10 +167,10 @@ func Ingest(store db.Store, src Source) (*Report, error) {
 	// markSeen registra la huella de una sesión ya persistida. Un fallo no
 	// pierde datos (solo obliga a re-leerla la próxima vez), pero se reporta.
 	markSeen := func(parsed *ParsedChat) {
-		if parsed.Fingerprint == "" {
+		if parsed.CursorKey == "" || parsed.Fingerprint == "" {
 			return
 		}
-		if err := store.SetIngestCursor(src.Name(), parsed.Chat.SessionPath, parsed.Fingerprint); err != nil {
+		if err := store.SetIngestCursor(src.Name(), parsed.CursorKey, parsed.Fingerprint); err != nil {
 			report.Errors = append(report.Errors, err.Error())
 		}
 	}
@@ -229,7 +233,7 @@ func (s *fileSource) Sessions() iter.Seq2[*ParsedChat, error] {
 	return s.ChangedSessions(func(string, string) bool { return true })
 }
 
-func (s *fileSource) ChangedSessions(changed func(path, fingerprint string) bool) iter.Seq2[*ParsedChat, error] {
+func (s *fileSource) ChangedSessions(changed func(key, fingerprint string) bool) iter.Seq2[*ParsedChat, error] {
 	return func(yield func(*ParsedChat, error) bool) {
 		root := s.root
 		if root == "" {
@@ -346,11 +350,7 @@ func parseFile(p Parser, path, fp string) (*ParsedChat, error) {
 	if err != nil {
 		return nil, err
 	}
-	// La huella es del archivo: los parsers que descartan un archivo devuelven
-	// un ParsedChat vacío, sin ruta, y aun así hay que recordarlo.
-	if parsed.Chat.SessionPath == "" {
-		parsed.Chat.SessionPath = path
-	}
+	parsed.CursorKey = path
 	parsed.Fingerprint = fp
 	return parsed, nil
 }

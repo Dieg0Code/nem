@@ -170,7 +170,7 @@ type NodeTerm struct {
 // aportar mensajes nuevos y la ingesta la salta. Estado local derivado: NO se
 // exporta en sync; borrarlo solo fuerza una re-ingesta completa (idempotente).
 type IngestCursor struct {
-	Path        string `gorm:"primaryKey"`
+	Path        string `gorm:"primaryKey"` // ruta del transcript, o db#id si las sesiones comparten archivo
 	Source      string `gorm:"index"`
 	Fingerprint string
 }

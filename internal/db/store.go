@@ -200,6 +200,14 @@ type store struct {
 	gdb *gorm.DB
 }
 
+// connPragmas se aplican a CADA conexión del pool (van en el DSN: un PRAGMA
+// ejecutado una vez solo afecta a la conexión que lo corrió).
+//   - foreign_keys: SQLite no las activa por defecto.
+//   - mmap_size: la búsqueda FTS5 salta a páginas aleatorias por cada match;
+//     leerlas mapeadas en vez de con una syscall por página la acelera ~2x.
+//   - cache_size: 64MB de caché de páginas (tope, se reserva bajo demanda).
+const connPragmas = "?_pragma=foreign_keys(1)&_pragma=mmap_size(1073741824)&_pragma=cache_size(-65536)"
+
 // New abre (o crea) el Store en la ruta configurada y aplica la migración.
 // Devuelve error si falta la ruta o si la conexión/migración fallan.
 //
@@ -227,16 +235,11 @@ func New(options ...Option) (Store, error) {
 		logLevel = logger.Info
 	}
 
-	gdb, err := gorm.Open(sqlite.Open(cfg.path), &gorm.Config{
+	gdb, err := gorm.Open(sqlite.Open(cfg.path+connPragmas), &gorm.Config{
 		Logger: logger.Default.LogMode(logLevel),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database at %s: %w", cfg.path, err)
-	}
-
-	// Foreign keys no vienen activadas por defecto en SQLite.
-	if err := gdb.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
-		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
 	}
 
 	s := &store{gdb: gdb}

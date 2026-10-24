@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 )
@@ -232,5 +233,34 @@ func TestFTS_TriggerOnDelete(t *testing.T) {
 	}
 	if count != 0 {
 		t.Errorf("after delete: expected 0 fts rows, got %d", count)
+	}
+}
+
+func TestNew_PragmasOnEveryConnection(t *testing.T) {
+	s := newTestStore(t)
+	sqlDB, err := s.gdb.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Dos conexiones simultáneas obligan al pool a abrir una segunda: los
+	// pragmas deben valer en ambas, no solo en la primera.
+	ctx := context.Background()
+	for i := range 2 {
+		conn, err := sqlDB.Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		var fk int
+		var mmap int64
+		if err := conn.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&fk); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.QueryRowContext(ctx, "PRAGMA mmap_size").Scan(&mmap); err != nil {
+			t.Fatal(err)
+		}
+		if fk != 1 || mmap == 0 {
+			t.Errorf("conn %d: foreign_keys=%d mmap_size=%d, want 1 and >0", i, fk, mmap)
+		}
 	}
 }

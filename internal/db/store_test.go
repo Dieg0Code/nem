@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -262,5 +263,144 @@ func TestNew_PragmasOnEveryConnection(t *testing.T) {
 		if fk != 1 || mmap == 0 {
 			t.Errorf("conn %d: foreign_keys=%d mmap_size=%d, want 1 and >0", i, fk, mmap)
 		}
+	}
+}
+
+// Un store creado antes de ftsRowidVersion tiene triggers que filtran por id y
+// filas FTS cuyo rowid no siempre coincide con el de su mensaje. Al abrirlo,
+// migrate debe realinearlas y dejar los triggers por rowid funcionando.
+func TestMigrate_UpgradesLegacyFTSTriggers(t *testing.T) {
+	s := newTestStore(t)
+	legacy := []string{
+		"DROP TRIGGER messages_fts_ai",
+		"DROP TRIGGER messages_fts_ad",
+		"DROP TRIGGER messages_fts_au",
+		`CREATE TRIGGER messages_fts_ai AFTER INSERT ON messages BEGIN
+		    INSERT INTO messages_fts(message_id, content) VALUES (new.id, new.content);
+		END`,
+		`CREATE TRIGGER messages_fts_ad AFTER DELETE ON messages BEGIN
+		    DELETE FROM messages_fts WHERE message_id = old.id;
+		END`,
+		`CREATE TRIGGER messages_fts_au AFTER UPDATE ON messages BEGIN
+		    UPDATE messages_fts SET content = new.content WHERE message_id = old.id;
+		END`,
+		"PRAGMA user_version = 0",
+		"INSERT INTO chats(id, source) VALUES ('c1', 'manual')",
+		// Una fila FTS huérfana desalinea los rowids de lo que viene después.
+		"INSERT INTO messages_fts(message_id, content) VALUES ('ghost', 'orphan')",
+		"INSERT INTO messages(id, chat_id, content, seq) VALUES ('m1', 'c1', 'decay logic', 1)",
+		"INSERT INTO messages(id, chat_id, content, seq) VALUES ('m2', 'c1', 'lock order', 2)",
+	}
+	for _, q := range legacy {
+		if err := s.gdb.Exec(q).Error; err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+
+	if err := s.Migrate(); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	var misaligned int64
+	s.gdb.Raw(`SELECT count(*) FROM messages_fts f
+		LEFT JOIN messages m ON m.rowid = f.rowid AND m.id = f.message_id
+		WHERE m.id IS NULL`).Scan(&misaligned)
+	if misaligned != 0 {
+		t.Fatalf("%d fts rows not aligned with messages after migrate", misaligned)
+	}
+
+	if err := s.gdb.Exec("UPDATE messages SET content = 'mutex order' WHERE id = 'm2'").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.gdb.Exec("DELETE FROM messages WHERE id = 'm1'").Error; err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	s.gdb.Raw("SELECT message_id || ':' || content FROM messages_fts ORDER BY rowid").Scan(&got)
+	if len(got) != 1 || got[0] != "m2:mutex order" {
+		t.Errorf("fts rows = %v, want [m2:mutex order]", got)
+	}
+
+	var version int
+	s.gdb.Raw("PRAGMA user_version").Scan(&version)
+	if version != ftsRowidVersion {
+		t.Errorf("user_version = %d, want %d", version, ftsRowidVersion)
+	}
+}
+
+// Un VACUUM o un dump/restore puede renumerar los rowids implícitos de
+// messages; las filas FTS quedan en su rowid viejo. Al reabrir, migrate debe
+// detectarlo y realinear, y una inserción no puede chocar con una fila FTS
+// desplazada.
+func TestMigrate_RealignsAfterRowidRenumbering(t *testing.T) {
+	s := newTestStore(t)
+	for _, q := range []string{
+		"INSERT INTO chats(id, source) VALUES ('c1', 'manual')",
+		"INSERT INTO messages(id, chat_id, content, seq) VALUES ('m1', 'c1', 'decay logic', 1)",
+		"INSERT INTO messages(id, chat_id, content, seq) VALUES ('m2', 'c1', 'lock order', 2)",
+		"INSERT INTO messages(id, chat_id, content, seq) VALUES ('m3', 'c1', 'retry budget', 3)",
+		"DELETE FROM messages WHERE id = 'm1'",
+		// Compacta como lo haría un VACUUM: m2→1, m3→2. Las filas FTS siguen en 2 y 3.
+		"UPDATE messages SET rowid = rowid - 1",
+	} {
+		if err := s.gdb.Exec(q).Error; err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+
+	if err := s.Migrate(); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	if err := s.gdb.Exec("INSERT INTO messages(id, chat_id, content, seq) VALUES ('m4', 'c1', 'cache warmup', 4)").Error; err != nil {
+		t.Fatalf("insert after realign: %v", err)
+	}
+	if err := s.gdb.Exec("DELETE FROM messages WHERE id = 'm2'").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	var got []string
+	s.gdb.Raw(`SELECT f.message_id FROM messages_fts f
+		JOIN messages m ON m.rowid = f.rowid AND m.id = f.message_id
+		ORDER BY f.message_id`).Scan(&got)
+	var total int64
+	s.gdb.Raw("SELECT count(*) FROM messages_fts").Scan(&total)
+	if len(got) != 2 || got[0] != "m3" || got[1] != "m4" || total != 2 {
+		t.Errorf("aligned fts rows = %v (total %d), want [m3 m4]", got, total)
+	}
+}
+
+// Si el VACUUM ocurre con el store abierto y luego se inserta, el máximo
+// rowid vuelve a coincidir; la marca del trigger debe forzar el realign igual.
+func TestMigrate_RealignsWhenInsertHitsDisplacedRow(t *testing.T) {
+	s := newTestStore(t)
+	for _, q := range []string{
+		"INSERT INTO chats(id, source) VALUES ('c1', 'manual')",
+		"INSERT INTO messages(id, chat_id, content, seq) VALUES ('a', 'c1', 'decay logic', 1)",
+		"INSERT INTO messages(id, chat_id, content, seq) VALUES ('b', 'c1', 'lock order', 2)",
+		"INSERT INTO messages(id, chat_id, content, seq) VALUES ('c', 'c1', 'retry budget', 3)",
+		"DELETE FROM messages WHERE id = 'a'",
+		"UPDATE messages SET rowid = rowid - 1",
+		// d toma rowid 3, donde seguía la fila FTS de c: los máximos se igualan.
+		"INSERT INTO messages(id, chat_id, content, seq) VALUES ('d', 'c1', 'cache warmup', 4)",
+	} {
+		if err := s.gdb.Exec(q).Error; err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+
+	if err := s.Migrate(); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	var got []string
+	s.gdb.Raw(`SELECT f.message_id FROM messages_fts f
+		JOIN messages m ON m.rowid = f.rowid AND m.id = f.message_id
+		ORDER BY f.message_id`).Scan(&got)
+	if strings.Join(got, ",") != "b,c,d" {
+		t.Errorf("aligned fts rows = %v, want [b c d]", got)
+	}
+	var flags int64
+	s.gdb.Raw("SELECT count(*) FROM fts_realign_needed").Scan(&flags)
+	if flags != 0 {
+		t.Errorf("realign flag not cleared")
 	}
 }

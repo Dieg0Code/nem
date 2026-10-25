@@ -75,7 +75,6 @@ func runSearch(cmd *cobra.Command, query string, top int, format, role, mode str
 		}
 		res, err := retrieve.Search(ns.Store, retrieve.Params{
 			Query: query, Top: top, Roles: roles, Allowed: allowed, Mode: mode, Expand: expand,
-			Learned: ns.Name == "" && scopeName == "",
 		})
 		if err != nil {
 			return err

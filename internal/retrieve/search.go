@@ -22,11 +22,16 @@ type Params struct {
 	Allowed []string // scope: chatIDs visibles (nil = sin filtro)
 	Mode    string   // "hybrid" (default) | "keyword" | "semantic"
 	Expand  bool     // activar PRF (expansión por relevancia)
-	Learned bool     // activar el canal aprendido (pares query→read; solo store personal)
+	// Learned activa el canal aprendido (pares query→read; solo store personal).
+	// Los llamadores no lo activan: medido sobre un store real con preguntas
+	// nuevas, bajaba el MRR de 0.76 a 0.52, porque basta un término compartido
+	// para que suban los nodos más leídos. La señal se sigue registrando, así un
+	// uso más estricto (p.ej. solo con queries casi repetidas) puede retomarla.
+	Learned bool
 }
 
 // Search corre el pipeline completo de recuperación y devuelve los resultados ya
-// fusionados (RRF + recencia): canales léxicos (BM25 sobre mensajes y nodos, con
+// fusionados por RRF (la fecha solo desempata): canales léxicos (BM25 sobre mensajes y nodos, con
 // stem-prefix vía FTSQuery), vectores opcionales, y —si Expand— un canal extra de
 // Pseudo-Relevance Feedback. Centraliza lo que antes estaba duplicado en el CLI y
 // el MCP. El agente sigue siendo el reranker final que lee los hits.

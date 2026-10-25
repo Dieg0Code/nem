@@ -250,7 +250,6 @@ func (h *handlers) search(ctx context.Context, _ *mcp.CallToolRequest, in search
 	expand := in.Expand != nil && *in.Expand // default false: el PRF diluye la precisión
 	results, err := retrieve.Search(h.store, retrieve.Params{
 		Query: in.Query, Top: in.Top, Roles: rolesFor(in.Role), Allowed: allowed, Mode: in.Mode, Expand: expand,
-		Learned: !scoped,
 	})
 	if err != nil {
 		return nil, none{}, err

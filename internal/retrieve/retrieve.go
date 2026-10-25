@@ -1,7 +1,8 @@
 // Package retrieve fusiona varios canales de búsqueda (BM25 sobre mensajes, BM25
 // sobre nodos del índice y —opcional— vectores) en un único ranking mediante
-// Reciprocal Rank Fusion (RRF) + un boost de recencia. El agente es el reranker
-// final: rerankea leyendo los hits; acá solo se ordenan candidatos baratos.
+// Reciprocal Rank Fusion (RRF); la fecha solo desempata. El agente es el
+// reranker final: rerankea leyendo los hits; acá solo se ordenan candidatos
+// baratos.
 package retrieve
 
 import "sort"
@@ -37,7 +38,7 @@ type Scored struct {
 
 type config struct {
 	k       float64 // constante RRF (amortigua el peso de los rangos altos)
-	recency float64 // peso del boost de recencia (gentil; desempata)
+	recency float64 // peso del boost de recencia (0 = solo desempata en el orden)
 }
 
 // Option configura la fusión.
@@ -46,7 +47,11 @@ type Option func(*config)
 // WithRRFK fija la constante k de RRF (default 60).
 func WithRRFK(k float64) Option { return func(c *config) { c.k = k } }
 
-// WithRecencyWeight fija el peso del boost de recencia (default 0.02).
+// WithRecencyWeight fija el peso del boost de recencia (default 0). Ojo con la
+// escala: entre el rank 1 y el 10 de un canal RRF hay ~0.004, así que un peso
+// de 0.02 ya ordena por fecha y no por relevancia. Medido sobre un store real
+// (preguntas con chat correcto conocido), 0.02 llevaba el MRR de 0.76 a 0.15.
+// Sin peso, la fecha igual desempata items de score idéntico.
 func WithRecencyWeight(w float64) Option { return func(c *config) { c.recency = w } }
 
 // itemKey identifica un item de forma única entre canales (mismo item en varios
@@ -57,7 +62,7 @@ func itemKey(it Item) string { return it.StoreID + "\x00" + it.Kind + "\x00" + i
 
 // Fuse combina los canales por RRF + recencia y devuelve los top `limit`.
 func Fuse(channels []Channel, limit int, options ...Option) []Scored {
-	cfg := &config{k: 60, recency: 0.02}
+	cfg := &config{k: 60}
 	for _, o := range options {
 		o(cfg)
 	}

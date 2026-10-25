@@ -42,7 +42,7 @@ func newSearchCmd() *cobra.Command {
 	cmd.Flags().StringVar(&format, "format", output.FormatMarkdown, "llm | json | markdown")
 	cmd.Flags().StringVar(&role, "role", "", "message roles to include (default: conversation + reasoning; 'all' includes tool)")
 	cmd.Flags().StringVar(&mode, "mode", "hybrid", "hybrid | keyword | semantic")
-	cmd.Flags().BoolVar(&expand, "expand", true, "expand recall via relevance feedback (PRF); ignored in --mode keyword")
+	cmd.Flags().BoolVar(&expand, "expand", false, "expand recall via relevance feedback (PRF): more recall, less precision; ignored in --mode keyword")
 	cmd.Flags().StringVar(&team, "team", "", "search only this team store (default: personal + all teams)")
 	cmd.Flags().BoolVar(&local, "local", false, "search only the personal store")
 	return cmd

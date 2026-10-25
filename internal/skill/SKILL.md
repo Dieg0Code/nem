@@ -23,7 +23,7 @@ token-bounded by design; navigate by meaning, don't dump.
 - **`nem outline`** — start here. The map of project → chat → commit, each with a
   summary, with durable **facts** and **reminders** at the top. Scan it, pick the
   branch that fits, drill in.
-- **`nem search "<terms>"`** — hybrid retrieval (BM25 + semantic + recency) that
+- **`nem search "<terms>"`** — hybrid retrieval (BM25 + structure + optional semantic) that
   finds by meaning, not exact keywords. Trust a natural query and the first results.
 - **`nem read <HEAD|hash|chat:id|commit:hash>`** — the frozen, immutable snapshot.
   Read it before proposing anything, so you don't redo work or contradict a past

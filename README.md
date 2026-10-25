@@ -133,10 +133,11 @@ say so — the agent asks first and recommends keeping that remote private.
   not a pointer. What you saved never changes.
 - **Navigable index** — a PageIndex-style tree (project → chat → commit) with
   summaries the agent reasons over before drilling in. The agent is the reranker.
-- **Hybrid search** — BM25 (SQLite FTS5) over messages + nodes, fused (RRF) with a
-  recency boost and optional semantic embeddings. In-process and self-contained:
-  multilingual **stemming** (morphological variants match) and **relevance
-  feedback** (co-occurrence expansion) lift recall without any external model.
+- **Hybrid search** — BM25 (SQLite FTS5) over messages + nodes, fused (RRF) with
+  optional semantic embeddings. In-process and self-contained: multilingual
+  **stemming** lets morphological variants match without any external model, and
+  opt-in **relevance feedback** (`--expand`, co-occurrence expansion) trades
+  precision for recall.
 - **Mutable summary layer** — `nem annotate` lets the agent curate how a commit is
   described and found, without touching the immutable content.
 

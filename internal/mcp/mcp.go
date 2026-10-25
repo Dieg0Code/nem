@@ -239,7 +239,7 @@ type searchIn struct {
 	Top    int    `json:"top,omitempty" jsonschema:"max results (default 10)"`
 	Mode   string `json:"mode,omitempty" jsonschema:"hybrid (default) or keyword"`
 	Role   string `json:"role,omitempty" jsonschema:"message roles to include; 'all' includes tool output"`
-	Expand *bool  `json:"expand,omitempty" jsonschema:"expand recall via relevance feedback (default true; ignored in keyword mode)"`
+	Expand *bool  `json:"expand,omitempty" jsonschema:"expand recall via relevance feedback: more recall, less precision (default false; ignored in keyword mode)"`
 }
 
 func (h *handlers) search(ctx context.Context, _ *mcp.CallToolRequest, in searchIn) (*mcp.CallToolResult, none, error) {
@@ -247,7 +247,7 @@ func (h *handlers) search(ctx context.Context, _ *mcp.CallToolRequest, in search
 	if err != nil {
 		return nil, none{}, err
 	}
-	expand := in.Expand == nil || *in.Expand // default true
+	expand := in.Expand != nil && *in.Expand // default false: el PRF diluye la precisión
 	results, err := retrieve.Search(h.store, retrieve.Params{
 		Query: in.Query, Top: in.Top, Roles: rolesFor(in.Role), Allowed: allowed, Mode: in.Mode, Expand: expand,
 		Learned: !scoped,

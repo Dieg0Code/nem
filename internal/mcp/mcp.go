@@ -49,7 +49,7 @@ func newServer(store db.Store, version string) *mcp.Server {
 	}, h.outline)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "nem_search",
-		Description: "Hybrid search over memory (BM25 on messages + index nodes, RRF + recency). Returns candidates; you rerank by reading them.",
+		Description: "Hybrid search over memory (BM25 on messages + index nodes, fused by RRF). Ranks by relevance, not date: for 'what is the latest', use nem_timeline. Query with distinctive terms (names, identifiers, versions); skip the name of whoever ran the session and meta words like 'session' or 'last'. Returns candidates; you rerank by reading them.",
 	}, h.search)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "nem_read",
@@ -57,7 +57,7 @@ func newServer(store db.Store, version string) *mcp.Server {
 	}, h.read)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "nem_timeline",
-		Description: "Show how a project's or chat's decisions (commits) evolved over time, oldest to newest (last = current).",
+		Description: "Show how a project's or chat's decisions (commits) evolved over time, oldest to newest (last = current). Start here for 'what was done last / what is pending', then read and reconcile.",
 	}, h.timeline)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "nem_status",
@@ -237,7 +237,7 @@ func (h *handlers) walk(b *strings.Builder, n db.Node, level, depth int, allowed
 type searchIn struct {
 	Query  string `json:"query" jsonschema:"the search query"`
 	Top    int    `json:"top,omitempty" jsonschema:"max results (default 10)"`
-	Mode   string `json:"mode,omitempty" jsonschema:"hybrid (default) or keyword"`
+	Mode   string `json:"mode,omitempty" jsonschema:"hybrid (default; finds decisions and conversation) or keyword (messages only: better for recalled wording like an error or file name; skips the decisions index)"`
 	Role   string `json:"role,omitempty" jsonschema:"message roles to include; 'all' includes tool output"`
 	Expand *bool  `json:"expand,omitempty" jsonschema:"expand recall via relevance feedback: more recall, less precision (default false; ignored in keyword mode)"`
 }

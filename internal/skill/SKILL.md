@@ -23,8 +23,22 @@ token-bounded by design; navigate by meaning, don't dump.
 - **`nem outline`** — start here. The map of project → chat → commit, each with a
   summary, with durable **facts** and **reminders** at the top. Scan it, pick the
   branch that fits, drill in.
-- **`nem search "<terms>"`** — hybrid retrieval (BM25 + structure + optional semantic) that
-  finds by meaning, not exact keywords. Trust a natural query and the first results.
+- **`nem search "<terms>"`** — hybrid retrieval over conversations *and* the index
+  of decisions. Results rank by **relevance, not date**. How to query well:
+  - Write the **distinctive** words: names, identifiers, versions, domain terms.
+    Natural phrasing is fine — filler words are dropped and word variants match
+    (`programar` finds `programación`). Trust the first results.
+  - Leave out *who ran the session* (the agent's name) and meta words ("session",
+    "chat", "last"): they appear everywhere and dilute the match. Keep any name
+    that is the actual subject — a library or tool the decision was about.
+  - **"What's the latest / what was left pending"** is a time question first:
+    `nem timeline <project>` (newest at the bottom) locates the recent context;
+    `read` it, and reconcile with earlier snapshots — open items can be older.
+  - Recalling specific wording from a conversation (an error message, a file
+    name)? `--mode keyword` searches the messages alone and finds those better,
+    but skips the decisions index — keep the default for "what did we decide".
+  - Top hits don't fit? Retry once with a sharper term instead of rewording the
+    same idea; a miss is information too (it may not have been persisted).
 - **`nem read <HEAD|hash|chat:id|commit:hash>`** — the frozen, immutable snapshot.
   Read it before proposing anything, so you don't redo work or contradict a past
   decision.
@@ -45,9 +59,6 @@ re-indexing.
 - If you discover a committed decision was later reversed, annotate the old node:
   `nem annotate <nodeID> -m "SUPERSEDED by <new hash>: <what changed>"` — so
   search stops sending future agents to dead decisions.
-- `search` → `read` pairs **train the ranking**: reading a result you found via
-  search teaches nem that this query leads there, and boosts it next time. So
-  search first, then read — it's not just recall, it sharpens the store.
 - If `outline` shows the **revision-health warning** (nothing superseded in a
   long time), treat it as an echo-chamber smell: this session, pick one recalled
   decision and genuinely test it against current reality — supersede it if it no

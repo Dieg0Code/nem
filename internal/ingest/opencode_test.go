@@ -269,3 +269,135 @@ func TestOpencodeSource_SkipsUnchangedSessions(t *testing.T) {
 		t.Fatalf("after streamed text: scanned=%d messages=%d, want 1/1", rep.Scanned, rep.Messages)
 	}
 }
+
+// addOpencodeV2Tables agrega a la fixture el esquema de opencode 2
+// (session_v2 + session_message): ses_1 migrada (sigue en legacy; su fila
+// msg_1 comparte id y msg_tail es una continuación que solo existe en v2) y
+// ses_3, nacida bajo opencode 2.
+func addOpencodeV2Tables(t *testing.T, path string) {
+	t.Helper()
+	sdb, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path))
+	if err != nil {
+		t.Fatalf("open fixture db: %v", err)
+	}
+	defer sdb.Close()
+	stmts := []string{
+		`CREATE TABLE session_v2 (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, slug TEXT NOT NULL,
+			directory TEXT NOT NULL, title TEXT, version TEXT NOT NULL,
+			time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL)`,
+		`CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL,
+			seq INTEGER NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`,
+
+		`INSERT INTO session_v2 VALUES ('ses_1', 'prj_1', 'fix-bug', 'C:\Users\Diego\dev\nem',
+			'fix the bug', '1.18.3', 1750000000000, 1750000600000)`,
+		`INSERT INTO session_message VALUES ('msg_1', 'ses_1', 'user', 1, 1750000010000, 1750000010000,
+			'{"text":"arregla el bug"}')`,
+		`INSERT INTO session_message VALUES ('msg_tail', 'ses_1', 'user', 7, 1750000700000, 1750000700000,
+			'{"text":"retomo la sesión en opencode 2"}')`,
+
+		`INSERT INTO session_v2 VALUES ('ses_3', 'prj_1', 'v2', 'C:\Users\Diego\dev\api',
+			NULL, '2.1.4', 1760000000000, 1760000900000)`,
+		`INSERT INTO session_message VALUES ('msg_a', 'ses_3', 'system', 1, 1760000001000, 1760000001000,
+			'{"text":"Today''s date is now: Mon"}')`,
+		`INSERT INTO session_message VALUES ('msg_b', 'ses_3', 'user', 2, 1760000010000, 1760000010000,
+			'{"text":"agrega el endpoint","files":[],"agents":[]}')`,
+		`INSERT INTO session_message VALUES ('msg_c', 'ses_3', 'assistant', 3, 1760000020000, 1760000020000,
+			'{"content":[{"type":"reasoning","text":"falta el handler"},{"type":"tool","id":"call_1","name":"shell","state":{"status":"completed","input":{"command":"go build"},"content":[{"type":"text","text":"ok build"}]}},{"type":"step"},{"type":"text","text":"listo el endpoint"}]}')`,
+		`INSERT INTO session_message VALUES ('msg_d', 'ses_3', 'idle', 4, 1760000030000, 1760000030000,
+			'{"outcome":"succeeded"}')`,
+	}
+	for _, s := range stmts {
+		if _, err := sdb.Exec(s); err != nil {
+			t.Fatalf("fixture exec: %v\n%s", err, s)
+		}
+	}
+}
+
+func TestOpencodeSource_V2Schema(t *testing.T) {
+	path := newOpencodeFixtureDB(t)
+	addOpencodeV2Tables(t, path)
+	src, err := NewOpencodeSource(WithRoot(path))
+	if err != nil {
+		t.Fatalf("NewOpencodeSource: %v", err)
+	}
+
+	byID := map[string]*ParsedChat{}
+	for pc, err := range src.Sessions() {
+		if err != nil {
+			t.Fatalf("Sessions() error: %v", err)
+		}
+		if byID[pc.Chat.ID] != nil {
+			t.Fatalf("session %s yielded twice", pc.Chat.ID)
+		}
+		byID[pc.Chat.ID] = pc
+	}
+	if len(byID) != 3 {
+		t.Fatalf("got %d sessions, want 3 (ses_1, ses_2 legacy + ses_3 v2)", len(byID))
+	}
+
+	// Una sesión en ambos esquemas se lee de legacy (mismos ids que ya están
+	// ingestados, sin duplicar msg_1) más su cola v2, ordenada después.
+	if got := byID["ses_1"].Messages; len(got) != 5 || got[0].ID != "prt_01" ||
+		got[4].ID != "msg_tail" || got[4].Seq <= got[3].Seq {
+		t.Errorf("ses_1 = %d msgs %v, want legacy prt_01.. + v2 tail msg_tail last", len(got), roles(got))
+	}
+
+	pc := byID["ses_3"]
+	if pc.Chat.Title != "api" || pc.Chat.CreatedAt != 1760000000 {
+		t.Errorf("ses_3 chat = %q/%d", pc.Chat.Title, pc.Chat.CreatedAt)
+	}
+	wantRoles := []string{RoleUser, RoleReasoning, RoleTool, RoleAssistant}
+	wantIDs := []string{"msg_b", "msg_c#0", "msg_c#1", "msg_c#3"}
+	if len(pc.Messages) != len(wantRoles) {
+		t.Fatalf("ses_3: got %d messages, want %d: %v", len(pc.Messages), len(wantRoles), roles(pc.Messages))
+	}
+	for i := range wantRoles {
+		m := pc.Messages[i]
+		if m.Role != wantRoles[i] || m.ID != wantIDs[i] {
+			t.Errorf("ses_3 msg %d = %s/%s, want %s/%s", i, m.Role, m.ID, wantRoles[i], wantIDs[i])
+		}
+		if i > 0 && m.Seq <= pc.Messages[i-1].Seq {
+			t.Errorf("ses_3 seq not increasing at %d: %d after %d", i, m.Seq, pc.Messages[i-1].Seq)
+		}
+	}
+	if got := pc.Messages[2].Content; !strings.Contains(got, "shell") ||
+		!strings.Contains(got, "go build") || !strings.Contains(got, "ok build") {
+		t.Errorf("v2 tool content = %q", got)
+	}
+	// El Seq sale del seq de la fila: no se corre si otra fila suma parts.
+	if got, want := pc.Messages[0].Seq, int64(opencodeV2SeqBase+2<<opencodeV2PartBits); got != want {
+		t.Errorf("msg_b seq = %d, want %d", got, want)
+	}
+	if pc.Messages[0].Timestamp != 1760000010 {
+		t.Errorf("timestamp = %d, want 1760000010", pc.Messages[0].Timestamp)
+	}
+
+	// El detector de sesión activa ve la sesión nacida en v2.
+	stamps, err := OpencodeSessionStamps(path, time.UnixMilli(0))
+	if err != nil {
+		t.Fatalf("OpencodeSessionStamps: %v", err)
+	}
+	if len(stamps) != 3 || stamps[0].ID != "ses_3" {
+		t.Errorf("stamps = %+v, want ses_3 first of 3", stamps)
+	}
+
+	// Re-ingestar no duplica y una segunda corrida salta todo.
+	store, err := db.New(db.WithPath(filepath.Join(t.TempDir(), "nem.db")))
+	if err != nil {
+		t.Fatalf("db.New: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	for i, want := range []struct {
+		messages  int64
+		unchanged int
+	}{{10, 0}, {0, 3}} {
+		rep, err := Ingest(store, src)
+		if err != nil {
+			t.Fatalf("Ingest #%d: %v", i, err)
+		}
+		if rep.Messages != want.messages || rep.Unchanged != want.unchanged {
+			t.Errorf("Ingest #%d messages=%d unchanged=%d, want %d/%d (errors: %v)",
+				i, rep.Messages, rep.Unchanged, want.messages, want.unchanged, rep.Errors)
+		}
+	}
+}
